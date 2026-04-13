@@ -1,0 +1,9 @@
+build/
+DerivedData/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.githooks/
+CONVENTIONS.md
+dop/
+scripts/
