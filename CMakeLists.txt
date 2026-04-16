@@ -36,6 +36,10 @@ else()
     FetchContent_MakeAvailable(juce)
 endif()
 
+if(APPLE)
+    find_library(MEDIA_PLAYER_FRAMEWORK MediaPlayer REQUIRED)
+endif()
+
 juce_add_binary_data(eqe_assets
     SOURCES
         assets/fonts/SometypeMono-Bold.ttf
@@ -43,43 +47,32 @@ juce_add_binary_data(eqe_assets
         assets/fonts/SometypeMono-OFL.txt
 )
 
-set(EQE_PLUGIN_FORMATS VST3)
-if(APPLE)
-    list(APPEND EQE_PLUGIN_FORMATS AUv3 Standalone)
-endif()
-
-set(EQE_PLUGIN_ARGS
+set(EQE_APP_ARGS
     COMPANY_NAME "mixolve"
     BUNDLE_ID "com.mixolve.eqe"
-    IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT FALSE
-    NEEDS_MIDI_OUTPUT FALSE
-    IS_MIDI_EFFECT FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
-    PLUGIN_MANUFACTURER_CODE Mxol
-    PLUGIN_CODE Eqe1
-    FORMATS ${EQE_PLUGIN_FORMATS}
     PRODUCT_NAME "eqe"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "This app needs microphone access to process audio."
 )
 
-juce_add_plugin(Eqe ${EQE_PLUGIN_ARGS})
+juce_add_gui_app(Eqe ${EQE_APP_ARGS})
 
 juce_generate_juce_header(Eqe)
 
+set_source_files_properties(source/MainComponent.cpp PROPERTIES LANGUAGE OBJCXX)
+
 target_sources(Eqe
     PRIVATE
-        source/PluginEditor.cpp
-        source/PluginEditor.h
-        source/PluginProcessor.cpp
-        source/PluginProcessor.h
+        source/Main.cpp
+        source/MainComponent.cpp
+        source/MainComponent.h
 )
 
 target_compile_definitions(Eqe
     PUBLIC
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
+        JUCE_PLUGINHOST_AU=1
         JUCE_VST3_CAN_REPLACE_VST2=0
 )
 
@@ -88,46 +81,12 @@ target_link_libraries(Eqe
         eqe_assets
         juce::juce_audio_utils
         juce::juce_dsp
+        ${MEDIA_PLAYER_FRAMEWORK}
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
-
-set(EQE_PACKAGE_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/eqe.vst3")
-
-if(APPLE)
-    set(EQE_PLUGIN_INSTALL_DIR "/Library/Audio/Plug-Ins/ALL/eqe.vst3")
-    set(EQE_PACKAGE_ZIP_PATH "${CMAKE_CURRENT_SOURCE_DIR}/eqe-macos.zip")
-elseif(WIN32)
-    set(EQE_PACKAGE_ZIP_PATH "${CMAKE_CURRENT_SOURCE_DIR}/eqe-windows.zip")
-else()
-    set(EQE_PACKAGE_ZIP_PATH "${CMAKE_CURRENT_SOURCE_DIR}/eqe.zip")
-endif()
-
-if(TARGET Eqe_VST3)
-    if(APPLE)
-        add_custom_command(TARGET Eqe_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E rm -rf "${EQE_PLUGIN_INSTALL_DIR}"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:Eqe_VST3>" "${EQE_PLUGIN_INSTALL_DIR}"
-            COMMAND ${CMAKE_COMMAND} -E rm -rf "${EQE_PACKAGE_STAGE_DIR}"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:Eqe_VST3>" "${EQE_PACKAGE_STAGE_DIR}"
-            COMMAND ${CMAKE_COMMAND} -E rm -f "${EQE_PACKAGE_ZIP_PATH}"
-            COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_CURRENT_BINARY_DIR}" ${CMAKE_COMMAND} -E tar "cf" "${EQE_PACKAGE_ZIP_PATH}" --format=zip -- "eqe.vst3"
-            COMMAND ${CMAKE_COMMAND} -E rm -rf "${EQE_PACKAGE_STAGE_DIR}"
-            VERBATIM
-        )
-    else()
-        add_custom_command(TARGET Eqe_VST3 POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E rm -rf "${EQE_PACKAGE_STAGE_DIR}"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:Eqe_VST3>" "${EQE_PACKAGE_STAGE_DIR}"
-            COMMAND ${CMAKE_COMMAND} -E rm -f "${EQE_PACKAGE_ZIP_PATH}"
-            COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_CURRENT_BINARY_DIR}" ${CMAKE_COMMAND} -E tar "cf" "${EQE_PACKAGE_ZIP_PATH}" --format=zip -- "eqe.vst3"
-            COMMAND ${CMAKE_COMMAND} -E rm -rf "${EQE_PACKAGE_STAGE_DIR}"
-            VERBATIM
-        )
-    endif()
-endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(EQE_IOS_DEVICE_UDID "" CACHE STRING "UDID of the device to install the built iOS app to")
@@ -139,9 +98,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 
     if(EQE_IOS_INSTALL_ON_DEVICE)
         add_custom_target(Eqe_InstallOnDevice
-            COMMAND xcrun devicectl device install app --device ${EQE_IOS_DEVICE_UDID} "$<TARGET_BUNDLE_DIR:Eqe_Standalone>"
-            DEPENDS Eqe_Standalone
+            COMMAND xcrun devicectl device install app --device ${EQE_IOS_DEVICE_UDID} "$<TARGET_BUNDLE_DIR:Eqe>"
+            DEPENDS Eqe
             VERBATIM
         )
     endif()
+
+    target_compile_definitions(Eqe
+        PUBLIC
+            JUCE_IOS=1
+    )
 endif()
