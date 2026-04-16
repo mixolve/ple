@@ -1,9 +1,25 @@
+# Local build trees
 build/
-DerivedData/
+snapshots/
+cmake-build-*/
+
+# IDE and OS files
 .DS_Store
-*.xcuserstate
-xcuserdata/
+.idea/
+.vscode/
 .githooks/
-CONVENTIONS.md
-dop/
-scripts/
+
+# Local-only project notes
+conventions.md
+
+# Local plugin artefacts
+*.vst3
+*.component
+*.aaxplugin
+*.app
+*.pkg
+*.dSYM/
+
+# Generated release packages
+/eqe-*.zip
+/dist/
