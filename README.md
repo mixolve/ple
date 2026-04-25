@@ -1,3 +1,3 @@
-# eqe
+# PLE
 
-[latest version (currently macOS only)](https://github.com/mixolve/eqe/releases/latest/download/eqe-macos.zip)
+[latest version (currently macOS only)](https://github.com/mixolve/ple/releases/latest/download/ple-macos.zip)
