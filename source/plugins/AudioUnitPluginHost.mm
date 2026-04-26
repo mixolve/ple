@@ -1,8 +1,8 @@
 #import <AVFAudio/AVAudioUnitComponent.h>
 
-#include "PluginHost.h"
+#include "plugins/AudioUnitPluginHost.h"
 
-#include "Popups.h"
+#include "ui/PopupViews.h"
 
 #include <algorithm>
 #include <set>
@@ -10,6 +10,23 @@
 
 namespace
 {
+const auto pluginTransitionCoverColour = juce::Colour (0xff000000);
+
+class TransitionCover final : public juce::Component
+{
+public:
+    TransitionCover()
+    {
+        setOpaque (true);
+        setInterceptsMouseClicks (false, false);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (pluginTransitionCoverColour);
+    }
+};
+
 static juce::String fourCharCodeToString (OSType type)
 {
     const char characters[5]
@@ -155,12 +172,12 @@ static const juce::PluginDescription* findPluginDescriptionForQuery (const std::
 }
 }
 
-void PluginHostController::initialise (Dependencies dependencies)
+void AudioUnitPluginHost::initialise (Dependencies dependencies)
 {
     parentComponent = &dependencies.parentComponent;
-    playbackState = &dependencies.playbackState;
     getPlaybackController = std::move (dependencies.getPlaybackController);
     closeAudioBrowser = std::move (dependencies.closeAudioBrowser);
+    closeNowPlayingWindow = std::move (dependencies.closeNowPlayingWindow);
     setStatusText = std::move (dependencies.setStatusText);
     setChoosePluginEnabled = std::move (dependencies.setChoosePluginEnabled);
     setOpenPluginGuiEnabled = std::move (dependencies.setOpenPluginGuiEnabled);
@@ -174,52 +191,49 @@ void PluginHostController::initialise (Dependencies dependencies)
         parentComponent->addChildComponent (pluginWindowAnchor);
 }
 
-void PluginHostController::reset()
+void AudioUnitPluginHost::reset()
 {
     closePluginMenu();
     destroyPluginWindow();
 }
 
-void PluginHostController::refreshInstalledPluginDescriptions()
+void AudioUnitPluginHost::refreshInstalledPluginDescriptions()
 {
     installedPluginDescriptions = findInstalledAudioUnitDescriptions();
 }
 
-const std::vector<juce::PluginDescription>& PluginHostController::getInstalledPluginDescriptions() const
-{
-    return installedPluginDescriptions;
-}
-
-const juce::PluginDescription* PluginHostController::findPluginDescriptionForQuery (const juce::String& query) const
+const juce::PluginDescription* AudioUnitPluginHost::findPluginDescriptionForQuery (const juce::String& query) const
 {
     return ::findPluginDescriptionForQuery (installedPluginDescriptions, query);
 }
 
-void PluginHostController::choosePlugin()
+void AudioUnitPluginHost::choosePlugin()
 {
     if (closeAudioBrowser)
         closeAudioBrowser();
+
+    if (closeNowPlayingWindow)
+        closeNowPlayingWindow();
 
     if (pluginMenuHost != nullptr)
     {
         closePluginMenu();
 
         if (setStatusText)
-            setStatusText ("plugin selection cancelled");
+            setStatusText ("plugin selection closed");
 
         return;
     }
 
-    if (setChoosePluginEnabled)
-        setChoosePluginEnabled (false);
+    destroyPluginWindow();
+
+        if (setOpenPluginGuiText)
+            setOpenPluginGuiText ("PLUG");
 
     if (setStatusText)
         setStatusText ("scanning installed auv3 plugins");
 
     refreshInstalledPluginDescriptions();
-
-    if (setChoosePluginEnabled)
-        setChoosePluginEnabled (true);
 
     if (installedPluginDescriptions.empty())
     {
@@ -256,7 +270,7 @@ void PluginHostController::choosePlugin()
     pluginMenuHost->toFront (true);
 }
 
-void PluginHostController::handlePluginMenuSelection (int selectedIndex)
+void AudioUnitPluginHost::handlePluginMenuSelection (int selectedIndex)
 {
     if (selectedIndex < 0 || selectedIndex >= static_cast<int> (installedPluginDescriptions.size()))
     {
@@ -272,7 +286,7 @@ void PluginHostController::handlePluginMenuSelection (int selectedIndex)
     loadPluginDescription (installedPluginDescriptions[static_cast<size_t> (selectedIndex)]);
 }
 
-void PluginHostController::loadPluginDescription (const juce::PluginDescription& description, bool openGuiAfterLoad)
+void AudioUnitPluginHost::loadPluginDescription (const juce::PluginDescription& description, bool openGuiAfterLoad)
 {
     auto* playbackController = getPlaybackController != nullptr ? getPlaybackController() : nullptr;
 
@@ -289,70 +303,65 @@ void PluginHostController::loadPluginDescription (const juce::PluginDescription&
 
     const auto loadToken = ++pluginLoadToken;
     const auto currentSampleRate = playbackController != nullptr ? playbackController->getCurrentSampleRate()
-                                                                 : playbackState != nullptr ? playbackState->currentSampleRate
-                                                                                            : 44100.0;
+                                                                 : 44100.0;
     const auto currentBlockSize = playbackController != nullptr ? playbackController->getCurrentBlockSize()
-                                                                : playbackState != nullptr ? playbackState->currentBlockSize
-                                                                                           : 512;
+                                                                : 512;
 
-    playbackState->audioUnitFormat.createPluginInstanceAsync (description,
-                                                              currentSampleRate,
-                                                              currentBlockSize,
-                                                              [weakSelf = weak_from_this(), loadToken, openGuiAfterLoad, description] (std::unique_ptr<juce::AudioPluginInstance> instance,
-                                                                                                                                       const juce::String& errorMessage) mutable
-                                                              {
-                                                                  if (auto self = weakSelf.lock())
-                                                                  {
-                                                                      if (self->pluginLoadToken != loadToken)
-                                                                          return;
+    audioUnitFormat.createPluginInstanceAsync (description,
+                                               currentSampleRate,
+                                               currentBlockSize,
+                                               [weakSelf = weak_from_this(), loadToken, openGuiAfterLoad, description] (std::unique_ptr<juce::AudioPluginInstance> instance,
+                                                                                                                        const juce::String& errorMessage) mutable
+                                               {
+                                                   if (auto self = weakSelf.lock())
+                                                   {
+                                                       if (self->pluginLoadToken != loadToken)
+                                                           return;
 
-                                                                      if (instance != nullptr)
-                                                                      {
-                                                                          auto sharedInstance = std::shared_ptr<juce::AudioPluginInstance> (instance.release());
-                                                                          self->currentPluginIdentifier = description.fileOrIdentifier;
+                                                       if (instance != nullptr)
+                                                       {
+                                                           auto sharedInstance = std::shared_ptr<juce::AudioPluginInstance> (instance.release());
+                                                           self->currentPluginIdentifier = description.fileOrIdentifier;
 
-                                                                          if (self->pluginMenuHost != nullptr)
-                                                                              self->pluginMenuHost->repaint();
+                                                           if (self->pluginMenuHost != nullptr)
+                                                               self->pluginMenuHost->repaint();
 
-                                                                          if (auto* controller = self->getPlaybackController != nullptr ? self->getPlaybackController() : nullptr)
-                                                                              controller->setPluginInstance (std::move (sharedInstance));
+                                                           if (auto* controller = self->getPlaybackController != nullptr ? self->getPlaybackController() : nullptr)
+                                                               controller->setPluginInstance (std::move (sharedInstance));
 
-                                                                          self->destroyPluginWindow();
-                                                                          self->ensurePluginWindowHost();
+                                                           self->destroyPluginWindow();
+                                                           self->ensurePluginWindowHost();
 
-                                                                          if (self->syncPlaybackUi)
-                                                                              self->syncPlaybackUi();
+                                                           if (self->syncPlaybackUi)
+                                                               self->syncPlaybackUi();
 
-                                                                          if (self->setStatusText)
-                                                                              self->setStatusText ("plugin loaded");
+                                                           if (self->setStatusText)
+                                                               self->setStatusText ("plugin loaded");
 
-                                                                          if (openGuiAfterLoad)
-                                                                          {
-                                                                              juce::MessageManager::callAsync ([weakSelf, loadToken]
-                                                                              {
-                                                                                  if (auto self = weakSelf.lock())
-                                                                                  {
-                                                                                      if (self->pluginLoadToken == loadToken)
-                                                                                          self->openPluginGui();
-                                                                                  }
-                                                                              });
-                                                                          }
-                                                                      }
-                                                                      else
-                                                                      {
-                                                                          if (self->setStatusText)
-                                                                          {
-                                                                              if (errorMessage.isNotEmpty())
-                                                                                  self->setStatusText ("plugin load failed: " + errorMessage.toLowerCase());
-                                                                              else
-                                                                                  self->setStatusText ("plugin load failed");
-                                                                          }
-                                                                      }
-                                                                  }
-                                                              });
+                                                           if (openGuiAfterLoad)
+                                                           {
+                                                               juce::MessageManager::callAsync ([weakSelf, loadToken]
+                                                               {
+                                                                   if (auto host = weakSelf.lock())
+                                                                   {
+                                                                       if (host->pluginLoadToken == loadToken)
+                                                                           host->openPluginGui();
+                                                                   }
+                                                               });
+                                                           }
+                                                       }
+                                                       else if (self->setStatusText)
+                                                       {
+                                                           if (errorMessage.isNotEmpty())
+                                                               self->setStatusText ("plugin load failed: " + errorMessage.toLowerCase());
+                                                           else
+                                                               self->setStatusText ("plugin load failed");
+                                                       }
+                                                   }
+                                               });
 }
 
-void PluginHostController::closePluginMenu()
+void AudioUnitPluginHost::closePluginMenu()
 {
     if (pluginMenuHost != nullptr)
         pluginMenuHost->setVisible (false);
@@ -360,7 +369,7 @@ void PluginHostController::closePluginMenu()
     pluginMenuHost.reset();
 }
 
-void PluginHostController::closePluginWindow()
+void AudioUnitPluginHost::closePluginWindow()
 {
     pluginWindowVisible = false;
     pluginWindowAnchor.setVisible (false);
@@ -369,21 +378,40 @@ void PluginHostController::closePluginWindow()
         pluginWindowHost->setVisible (false);
 }
 
-void PluginHostController::openPluginGui()
+void AudioUnitPluginHost::openPluginGui()
 {
-    closePluginMenu();
+    const auto closeTransientSurfaces = [this]
+    {
+        if (closeAudioBrowser)
+            closeAudioBrowser();
 
-    if (closeAudioBrowser)
-        closeAudioBrowser();
+        if (closeNowPlayingWindow)
+            closeNowPlayingWindow();
+
+        closePluginMenu();
+    };
+
+    const auto armPluginWindowPaintCallback = [this]
+    {
+        if (auto* frame = dynamic_cast<PluginWindowFrame*> (pluginWindowHost.get()))
+        {
+            frame->setPaintCallback ([weakSelf = weak_from_this()]
+            {
+                if (auto self = weakSelf.lock())
+                    self->hidePluginTransitionCover();
+            });
+        }
+    };
 
     if (pluginWindowHost != nullptr)
     {
         if (pluginWindowVisible)
         {
+            closeTransientSurfaces();
             closePluginWindow();
 
             if (setOpenPluginGuiText)
-                setOpenPluginGuiText ("OPEN");
+                setOpenPluginGuiText ("PLUG");
 
             if (setStatusText)
                 setStatusText ("plugin gui closed");
@@ -391,10 +419,13 @@ void PluginHostController::openPluginGui()
             return;
         }
 
+        armPluginWindowPaintCallback();
         showPluginWindow();
+        showPluginTransitionCover();
+        closeTransientSurfaces();
 
         if (setOpenPluginGuiText)
-            setOpenPluginGuiText ("CLOSE");
+            setOpenPluginGuiText ("PLUG");
 
         if (setStatusText)
             setStatusText ("plugin gui opened");
@@ -435,10 +466,13 @@ void PluginHostController::openPluginGui()
         pluginWindowHost->setVisible (false);
         pluginWindowAnchor.setVisible (false);
 
+        armPluginWindowPaintCallback();
         showPluginWindow();
+        showPluginTransitionCover();
+        closeTransientSurfaces();
 
         if (setOpenPluginGuiText)
-            setOpenPluginGuiText ("CLOSE");
+            setOpenPluginGuiText ("PLUG");
 
         if (setStatusText)
             setStatusText ("plugin gui opened");
@@ -450,7 +484,7 @@ void PluginHostController::openPluginGui()
     }
 }
 
-void PluginHostController::resized()
+void AudioUnitPluginHost::resized()
 {
     const auto pluginWindowBounds = getPluginWindowBounds != nullptr ? getPluginWindowBounds()
                                                                      : parentComponent != nullptr ? parentComponent->getLocalBounds()
@@ -467,7 +501,7 @@ void PluginHostController::resized()
     pluginWindowAnchor.setVisible (pluginWindowHost != nullptr && pluginWindowVisible);
 }
 
-void PluginHostController::ensurePluginWindowHost()
+void AudioUnitPluginHost::ensurePluginWindowHost()
 {
     if (pluginWindowHost != nullptr)
         return;
@@ -497,7 +531,7 @@ void PluginHostController::ensurePluginWindowHost()
     }
 }
 
-void PluginHostController::showPluginWindow()
+void AudioUnitPluginHost::showPluginWindow()
 {
     ensurePluginWindowHost();
 
@@ -508,6 +542,7 @@ void PluginHostController::showPluginWindow()
                                                                      : parentComponent != nullptr ? parentComponent->getLocalBounds()
                                                                                                  : juce::Rectangle<int>();
     pluginWindowAnchor.setBounds (pluginWindowBounds);
+    pluginWindowAnchor.toFront (false);
     pluginWindowHost->setBounds (pluginWindowAnchor.getLocalBounds());
     pluginWindowHost->setVisible (true);
     pluginWindowAnchor.setVisible (true);
@@ -515,8 +550,10 @@ void PluginHostController::showPluginWindow()
     pluginWindowVisible = true;
 }
 
-void PluginHostController::destroyPluginWindow()
+void AudioUnitPluginHost::destroyPluginWindow()
 {
+    hidePluginTransitionCover();
+
     if (pluginWindowHost != nullptr)
         pluginWindowHost->setVisible (false);
 
@@ -525,7 +562,34 @@ void PluginHostController::destroyPluginWindow()
     pluginWindowHost.reset();
 }
 
-int PluginHostController::getSelectedPluginIndex() const
+void AudioUnitPluginHost::showPluginTransitionCover()
+{
+    if (pluginWindowHost == nullptr)
+        return;
+
+    if (pluginTransitionCover == nullptr)
+    {
+        pluginTransitionCover = std::make_unique<TransitionCover>();
+        pluginWindowAnchor.addChildComponent (*pluginTransitionCover);
+    }
+
+    const auto pluginWindowBounds = getPluginWindowBounds != nullptr ? getPluginWindowBounds()
+                                                                     : parentComponent != nullptr ? parentComponent->getLocalBounds()
+                                                                                                 : juce::Rectangle<int>();
+
+    pluginWindowAnchor.setBounds (pluginWindowBounds);
+    pluginTransitionCover->setBounds (pluginWindowAnchor.getLocalBounds());
+    pluginTransitionCover->setVisible (true);
+    pluginTransitionCover->toFront (true);
+}
+
+void AudioUnitPluginHost::hidePluginTransitionCover()
+{
+    if (pluginTransitionCover != nullptr)
+        pluginTransitionCover->setVisible (false);
+}
+
+int AudioUnitPluginHost::getSelectedPluginIndex() const
 {
     if (currentPluginIdentifier.isEmpty())
         return -1;

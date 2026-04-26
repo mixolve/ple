@@ -1,4 +1,4 @@
-#include "Popups.h"
+#include "ui/PopupViews.h"
 #include "BinaryData.h"
 
 namespace
@@ -54,6 +54,12 @@ PluginWindowFrame::PluginWindowFrame (std::unique_ptr<juce::Component> contentTo
     addAndMakeVisible (*content);
 }
 
+void PluginWindowFrame::setPaintCallback (PaintCallback callback)
+{
+    paintCallback = std::move (callback);
+    paintCallbackScheduled = false;
+}
+
 void PluginWindowFrame::paint (juce::Graphics& g)
 {
     g.setColour (popupUiGrey800);
@@ -61,6 +67,18 @@ void PluginWindowFrame::paint (juce::Graphics& g)
 
     g.setColour (popupUiGrey500);
     g.drawRect (getLocalBounds(), 1);
+
+    if (paintCallback != nullptr && ! paintCallbackScheduled)
+    {
+        paintCallbackScheduled = true;
+        const auto callback = paintCallback;
+
+        juce::MessageManager::callAsync ([callback]
+        {
+            if (callback != nullptr)
+                callback();
+        });
+    }
 }
 
 void PluginWindowFrame::resized()
@@ -464,4 +482,195 @@ void FileBrowserContent::Surface::updateHoveredRow (float y)
         hoveredIndex = nextHoveredIndex;
         repaint();
     }
+}
+
+NowPlayingContent::NowPlayingContent()
+{
+    setOpaque (true);
+}
+
+void NowPlayingContent::setTrack (const ple::NowPlayingTrack& track)
+{
+    nowPlayingTrack = track;
+    repaint();
+}
+
+juce::String NowPlayingContent::formatTimeText (double seconds)
+{
+    if (seconds < 0.0)
+        return "--:--";
+
+    const auto totalSeconds = juce::jmax (0, juce::roundToInt (seconds));
+    const auto hours = totalSeconds / 3600;
+    const auto minutes = (totalSeconds % 3600) / 60;
+    const auto secs = totalSeconds % 60;
+
+    const auto twoDigits = [] (int value)
+    {
+        return value < 10 ? juce::String ("0") + juce::String (value)
+                          : juce::String (value);
+    };
+
+    if (hours > 0)
+        return juce::String (hours) + ":" + twoDigits (minutes) + ":" + twoDigits (secs);
+
+    return juce::String (minutes) + ":" + twoDigits (secs);
+}
+
+void NowPlayingContent::paint (juce::Graphics& g)
+{
+    g.setColour (popupUiGrey800);
+    g.fillAll();
+
+    auto contentArea = getLocalBounds().reduced (4, 4);
+    const auto title = nowPlayingTrack.title.isNotEmpty() ? nowPlayingTrack.title : juce::String ("NO TRACK");
+    const auto subtitle = nowPlayingTrack.artist.isNotEmpty() ? nowPlayingTrack.artist : juce::String ("UNKNOWN ARTIST");
+
+    const auto textLineHeight = juce::roundToInt (popupUiFontSize);
+    const auto textGap = 6;
+    const auto maxArtworkWidth = juce::jmax (1, juce::roundToInt (contentArea.getWidth() * 0.9f));
+    const auto maxArtworkHeight = juce::jmax (1, contentArea.getHeight() - (textLineHeight * 2) - textGap);
+    const auto artworkAspectRatio = nowPlayingTrack.artwork.isValid() && nowPlayingTrack.artwork.getHeight() > 0
+                                        ? (float) nowPlayingTrack.artwork.getWidth() / (float) nowPlayingTrack.artwork.getHeight()
+                                        : 1.0f;
+
+    auto artworkArea = juce::Rectangle<float> (0.0f, 0.0f, (float) maxArtworkWidth, (float) maxArtworkHeight);
+
+    if (artworkArea.getWidth() / artworkArea.getHeight() > artworkAspectRatio)
+        artworkArea.setWidth (artworkArea.getHeight() * artworkAspectRatio);
+    else
+        artworkArea.setHeight (artworkArea.getWidth() / artworkAspectRatio);
+
+    const auto blockHeight = juce::roundToInt (artworkArea.getHeight()) + textGap + (textLineHeight * 2);
+    const auto blockTop = contentArea.getY() + juce::jmax (0, (contentArea.getHeight() - blockHeight) / 2);
+
+    artworkArea.setX ((float) contentArea.getCentreX() - (artworkArea.getWidth() / 2.0f));
+    artworkArea.setY ((float) blockTop);
+
+    const auto artworkBounds = artworkArea.toNearestInt();
+
+    g.setColour (popupUiGrey700);
+    g.fillRect (artworkBounds);
+    g.setColour (popupUiGrey500);
+    g.drawRect (artworkBounds, 1);
+
+    if (nowPlayingTrack.artwork.isValid())
+    {
+        g.drawImageWithin (nowPlayingTrack.artwork,
+                           artworkBounds.getX(),
+                           artworkBounds.getY(),
+                           artworkBounds.getWidth(),
+                           artworkBounds.getHeight(),
+                           juce::RectanglePlacement::centred,
+                           false);
+    }
+
+    auto textArea = contentArea;
+    textArea.removeFromTop ((artworkBounds.getY() - contentArea.getY()) + artworkBounds.getHeight() + textGap);
+
+    auto titleArea = textArea.removeFromTop (textLineHeight);
+    auto subtitleArea = textArea.removeFromTop (textLineHeight);
+
+    g.setColour (popupUiWhite);
+    g.setFont (makePopupUiFont());
+    g.drawFittedText (title.toUpperCase(), titleArea, juce::Justification::centred, 1, 1.0f);
+    g.drawFittedText (subtitle.toUpperCase(), subtitleArea, juce::Justification::centred, 1, 1.0f);
+}
+
+AboutContent::AboutContent()
+{
+    setOpaque (true);
+    setInterceptsMouseClicks (true, false);
+
+    auto markdownText = juce::String::fromUTF8 (BinaryData::about_md, BinaryData::about_mdSize);
+    markdownLines.addLines (markdownText);
+
+    if (markdownLines.size() > 0)
+    {
+        const auto firstLine = markdownLines[0].trim();
+
+        if (firstLine.startsWithChar ('['))
+        {
+            const auto closeLabel = firstLine.indexOfChar (']');
+            const auto openUrl = firstLine.indexOfChar ('(');
+            const auto closeUrl = firstLine.lastIndexOfChar (')');
+
+            if (closeLabel > 1 && openUrl == closeLabel + 1 && closeUrl > openUrl + 1)
+            {
+                linkText = firstLine.substring (1, closeLabel);
+                linkUrl = juce::URL (firstLine.substring (openUrl + 1, closeUrl));
+            }
+        }
+
+        if (linkText.isEmpty())
+            linkText = firstLine;
+    }
+
+    if (linkText.isEmpty())
+        linkText = "all-in-web";
+}
+
+void AboutContent::paint (juce::Graphics& g)
+{
+    g.setColour (popupUiGrey800);
+    g.fillAll();
+
+    g.setFont (makePopupUiFont());
+
+    for (int i = 0; i < markdownLines.size(); ++i)
+    {
+        const auto lineBoundsForRow = lineBounds[static_cast<size_t> (i)];
+        const auto isLinkLine = i == 0;
+
+        g.setColour (isLinkLine ? popupUiAccentPeach : popupUiWhite);
+
+        if (isLinkLine)
+            g.drawFittedText (linkText, lineBoundsForRow, juce::Justification::centred, 1, 1.0f);
+        else
+            g.drawFittedText (markdownLines[i], lineBoundsForRow, juce::Justification::centred, 1, 1.0f);
+    }
+}
+
+void AboutContent::resized()
+{
+    auto contentArea = getLocalBounds().reduced (12);
+    const auto textHeight = juce::roundToInt (makePopupUiFont().getHeight()) + 6;
+    const auto lineGap = 8;
+    const auto lineHeight = textHeight;
+    const auto blockHeight = (markdownLines.size() * lineHeight) + juce::jmax (0, (markdownLines.size() - 1) * lineGap);
+    const auto top = contentArea.getY() + juce::jmax (0, (contentArea.getHeight() - blockHeight) / 2);
+
+    lineBounds.clear();
+    lineBounds.reserve (static_cast<size_t> (markdownLines.size()));
+
+    auto currentY = top;
+
+    for (int i = 0; i < markdownLines.size(); ++i)
+    {
+        const auto rowBounds = juce::Rectangle<int> (contentArea.getX(), currentY, contentArea.getWidth(), lineHeight);
+        lineBounds.push_back (rowBounds);
+
+        if (i == 0)
+            linkBounds = rowBounds;
+
+        currentY += lineHeight + lineGap;
+    }
+}
+
+void AboutContent::mouseMove (const juce::MouseEvent& event)
+{
+    setMouseCursor (linkBounds.contains (event.getPosition())
+                        ? juce::MouseCursor::PointingHandCursor
+                        : juce::MouseCursor::NormalCursor);
+}
+
+void AboutContent::mouseExit (const juce::MouseEvent&)
+{
+    setMouseCursor (juce::MouseCursor::NormalCursor);
+}
+
+void AboutContent::mouseUp (const juce::MouseEvent& event)
+{
+    if (linkUrl.isWellFormed() && linkBounds.contains (event.getPosition()))
+        linkUrl.launchInDefaultBrowser();
 }

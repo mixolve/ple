@@ -1,20 +1,20 @@
 #pragma once
 
-#include "Playback.h"
+#include "audio/PlaybackController.h"
 
 #include <functional>
 #include <memory>
 #include <vector>
 
-class PluginHostController final : public std::enable_shared_from_this<PluginHostController>
+class AudioUnitPluginHost final : public std::enable_shared_from_this<AudioUnitPluginHost>
 {
 public:
     struct Dependencies
     {
         juce::Component& parentComponent;
-        ple::PlaybackState& playbackState;
         std::function<ple::PlaybackController*()> getPlaybackController;
         std::function<void()> closeAudioBrowser;
+        std::function<void()> closeNowPlayingWindow;
         std::function<void (const juce::String&)> setStatusText;
         std::function<void (bool)> setChoosePluginEnabled;
         std::function<void (bool)> setOpenPluginGuiEnabled;
@@ -23,13 +23,12 @@ public:
         std::function<juce::Rectangle<int>()> getPluginWindowBounds;
     };
 
-    PluginHostController() = default;
+    AudioUnitPluginHost() = default;
 
     void initialise (Dependencies dependencies);
     void reset();
 
     void refreshInstalledPluginDescriptions();
-    const std::vector<juce::PluginDescription>& getInstalledPluginDescriptions() const;
     const juce::PluginDescription* findPluginDescriptionForQuery (const juce::String& query) const;
 
     void choosePlugin();
@@ -41,20 +40,22 @@ public:
     void resized();
     int getSelectedPluginIndex() const;
 
-    PluginHostController (const PluginHostController&) = delete;
-    PluginHostController& operator= (const PluginHostController&) = delete;
-    PluginHostController (PluginHostController&&) = delete;
-    PluginHostController& operator= (PluginHostController&&) = delete;
+    AudioUnitPluginHost (const AudioUnitPluginHost&) = delete;
+    AudioUnitPluginHost& operator= (const AudioUnitPluginHost&) = delete;
+    AudioUnitPluginHost (AudioUnitPluginHost&&) = delete;
+    AudioUnitPluginHost& operator= (AudioUnitPluginHost&&) = delete;
 
 private:
     void ensurePluginWindowHost();
     void showPluginWindow();
     void destroyPluginWindow();
+    void showPluginTransitionCover();
+    void hidePluginTransitionCover();
 
     juce::Component* parentComponent = nullptr;
-    ple::PlaybackState* playbackState = nullptr;
     std::function<ple::PlaybackController*()> getPlaybackController;
     std::function<void()> closeAudioBrowser;
+    std::function<void()> closeNowPlayingWindow;
     std::function<void (const juce::String&)> setStatusText;
     std::function<void (bool)> setChoosePluginEnabled;
     std::function<void (bool)> setOpenPluginGuiEnabled;
@@ -65,8 +66,10 @@ private:
     juce::Component pluginWindowAnchor;
     std::unique_ptr<juce::Component> pluginWindowHost;
     std::unique_ptr<juce::Component> pluginMenuHost;
+    std::unique_ptr<juce::Component> pluginTransitionCover;
     bool pluginWindowVisible = false;
 
+    juce::AudioUnitPluginFormat audioUnitFormat;
     std::vector<juce::PluginDescription> installedPluginDescriptions;
     juce::String currentPluginIdentifier;
     int pluginLoadToken = 0;

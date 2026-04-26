@@ -1,14 +1,19 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include <atomic>
 #include <memory>
-#include "Playback.h"
-#include <vector>
+#include "audio/PlaybackController.h"
 
 class MainView;
-class BrowserController;
-class PluginHostController;
+class AudioBrowserController;
+class AudioUnitPluginHost;
+class PluginWindowFrame;
+class NowPlayingContent;
+
+namespace ple
+{
+class LockScreenController;
+}
 
 class MainComponent : public juce::AudioAppComponent
                      , private juce::Timer
@@ -28,44 +33,48 @@ public:
 private:
     void refreshAudioLibrary();
     bool loadAudioFile(const juce::File& file);
-    void restartCurrentTrack();
     void handlePlaybackFinished();
     void cyclePlaybackMode();
     void updatePlaybackModeButton();
     juce::String getPlaybackModeLabel() const;
-    int getTrackIndexForNavigation (bool movingForward) const;
     void startPlayback();
     void pausePlayback();
+    void ensureAudioOutputActive();
+    void suspendAudioOutputForPause();
+    void seekPlayback (double positionSeconds);
     void togglePlayback();
     void playPreviousTrack();
     void playNextTrack();
     void choosePlugin();
     void browseAudioFiles();
-    void handleAudioBrowserSelection(int selectedIndex);
-    void handleAudioBrowserFolderPlaySelection(int selectedIndex);
     void refreshAudioBrowserDirectory();
-    void handlePluginMenuSelection(int selectedIndex);
-    void loadPluginDescription(const juce::PluginDescription& description, bool openGuiAfterLoad = false);
     void openPluginGui();
+    void openAboutWindow();
+    void closeAboutWindow();
+    void openNowPlayingWindow();
+    void closeNowPlayingWindow();
+    void refreshNowPlayingWindow();
     void syncPlaybackUi();
     void scheduleAudioBrowserDirectoryRefresh();
-    bool isPlaybackActive() const;
-    int getSelectedPluginIndex() const;
-    juce::Rectangle<int> getContentArea() const;
     void setStatusText (const juce::String& text);
     void setPlaybackModeText (const juce::String& text);
     void setChoosePluginEnabled (bool enabled);
     void setOpenPluginGuiEnabled (bool enabled);
     void setOpenPluginGuiText (const juce::String& text);
 
-    std::unique_ptr<BrowserController> browserController;
-    std::shared_ptr<PluginHostController> pluginHostController;
+    std::unique_ptr<AudioBrowserController> audioBrowser;
+    std::shared_ptr<AudioUnitPluginHost> pluginHost;
+    std::unique_ptr<ple::LockScreenController> lockScreenController;
     std::unique_ptr<MainView> mainView;
+    std::unique_ptr<PluginWindowFrame> aboutWindowHost;
+    std::unique_ptr<PluginWindowFrame> nowPlayingWindowHost;
+    NowPlayingContent* nowPlayingContent = nullptr;
+    juce::TextButton choosePluginButton;
 
     ple::PlaybackState playbackState;
     std::unique_ptr<ple::PlaybackController> playbackController;
-    bool automationPlayOnLaunch = false;
     bool audioBrowserDirectoryRefreshPending = false;
+    bool audioOutputActive = false;
 
     std::unique_ptr<juce::LookAndFeel_V4> lookAndFeel;
 

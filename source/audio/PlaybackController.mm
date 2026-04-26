@@ -1,13 +1,16 @@
-#include "Playback.h"
+#if __has_include(<AVFoundation/AVFoundation.h>)
+#import <AVFoundation/AVFoundation.h>
+#endif
+
+#include "audio/PlaybackController.h"
+#include "audio/AudioFiles.h"
+
 #include <initializer_list>
 
 namespace ple
 {
-static juce::File getAudioRootDirectory()
+namespace
 {
-    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
-}
-
 static juce::File getFallbackNoiseFile()
 {
     return juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ple-white-noise.wav");
@@ -20,9 +23,9 @@ static bool createFallbackNoiseFileIfNeeded (const juce::File& file)
 
     if (auto parent = file.getParentDirectory(); parent.exists() || parent.createDirectory())
     {
-        std::unique_ptr<juce::FileOutputStream> outputStream (file.createOutputStream());
+        auto fileOutputStream = file.createOutputStream();
 
-        if (outputStream == nullptr || ! outputStream->openedOk())
+        if (fileOutputStream == nullptr || ! fileOutputStream->openedOk())
             return false;
 
         juce::WavAudioFormat wavFormat;
@@ -31,17 +34,15 @@ static bool createFallbackNoiseFileIfNeeded (const juce::File& file)
         constexpr int bitsPerSample = 16;
         constexpr int noiseDurationSeconds = 30;
 
-        std::unique_ptr<juce::AudioFormatWriter> writer (wavFormat.createWriterFor (outputStream.get(),
-                                                                                    sampleRate,
-                                                                                    channels,
-                                                                                    bitsPerSample,
-                                                                                    {},
-                                                                                    0));
+        std::unique_ptr<juce::OutputStream> outputStream (fileOutputStream.release());
+        auto writer = wavFormat.createWriterFor (outputStream,
+                                                 juce::AudioFormatWriterOptions()
+                                                     .withSampleRate (sampleRate)
+                                                     .withNumChannels (channels)
+                                                     .withBitsPerSample (bitsPerSample));
 
         if (writer == nullptr)
             return false;
-
-        outputStream.release();
 
         juce::AudioBuffer<float> buffer (channels, 512);
         juce::Random random;
@@ -67,25 +68,6 @@ static bool createFallbackNoiseFileIfNeeded (const juce::File& file)
     return false;
 }
 
-static bool isPlayableAudioFile (const juce::File& file)
-{
-    if (! file.existsAsFile())
-        return false;
-
-    const auto extension = file.getFileExtension().toLowerCase();
-
-    return extension == ".wav"
-        || extension == ".wave"
-        || extension == ".aif"
-        || extension == ".aiff"
-        || extension == ".mp3"
-        || extension == ".m4a"
-        || extension == ".aac"
-        || extension == ".caf"
-        || extension == ".flac"
-        || extension == ".ogg";
-}
-
 static juce::String getMetadataValue (const juce::StringPairArray& metadataValues,
                                       std::initializer_list<const char*> candidateKeys)
 {
@@ -102,6 +84,83 @@ static juce::String getMetadataValue (const juce::StringPairArray& metadataValue
     }
 
     return {};
+}
+
+#if JUCE_IOS
+static juce::String juceStringFromNSString (NSString* string)
+{
+    return string != nil ? juce::String::fromCFString ((CFStringRef) string) : juce::String();
+}
+
+static juce::Image loadImageFromNSData (NSData* data)
+{
+    if (data == nil || [data length] == 0)
+        return {};
+
+    juce::MemoryInputStream input ([data bytes], [data length], false);
+    return juce::ImageFileFormat::loadFrom (input);
+}
+
+static NSData* getArtworkDataFromMetadataValue (id value)
+{
+    if ([value isKindOfClass:[NSData class]])
+        return (NSData*) value;
+
+    if ([value isKindOfClass:[NSDictionary class]])
+    {
+        id data = [(NSDictionary*) value objectForKey:AVMetadataKeySpaceID3];
+
+        if ([data isKindOfClass:[NSData class]])
+            return (NSData*) data;
+
+        data = [(NSDictionary*) value objectForKey:@"data"];
+
+        if ([data isKindOfClass:[NSData class]])
+            return (NSData*) data;
+    }
+
+    return nil;
+}
+
+static void mergeNativeMetadata (const juce::File& file,
+                                 juce::String& title,
+                                 juce::String& artist,
+                                 juce::String& album,
+                                 juce::Image& artwork)
+{
+    @autoreleasepool
+    {
+        NSString* path = [NSString stringWithUTF8String:file.getFullPathName().toRawUTF8()];
+        NSURL* url = [NSURL fileURLWithPath:path];
+        AVURLAsset* asset = [AVURLAsset URLAssetWithURL:url options:nil];
+
+        for (AVMetadataItem* item in [asset commonMetadata])
+        {
+            NSString* commonKey = [item commonKey];
+
+            if ([commonKey isEqualToString:AVMetadataCommonKeyTitle] && title.isEmpty())
+                title = juceStringFromNSString ((NSString*) [item stringValue]).trim();
+            else if ([commonKey isEqualToString:AVMetadataCommonKeyArtist] && artist.isEmpty())
+                artist = juceStringFromNSString ((NSString*) [item stringValue]).trim();
+            else if ([commonKey isEqualToString:AVMetadataCommonKeyAlbumName] && album.isEmpty())
+                album = juceStringFromNSString ((NSString*) [item stringValue]).trim();
+            else if ([commonKey isEqualToString:AVMetadataCommonKeyArtwork] && ! artwork.isValid())
+            {
+                if (auto* data = getArtworkDataFromMetadataValue ([item value]))
+                    artwork = loadImageFromNSData (data);
+            }
+        }
+    }
+}
+#else
+static void mergeNativeMetadata (const juce::File&,
+                                 juce::String&,
+                                 juce::String&,
+                                 juce::String&,
+                                 juce::Image&)
+{
+}
+#endif
 }
 
 PlaybackController::PlaybackController (PlaybackState& stateToUse)
@@ -201,7 +260,6 @@ void PlaybackController::releaseResources()
 {
     const juce::ScopedLock lock (state.audioSourceLock);
     state.transportSource.releaseResources();
-    state.readerSource.reset();
 
     auto activePlugin = std::atomic_load (&state.pluginInstance);
 
@@ -297,6 +355,9 @@ bool PlaybackController::loadAudioFileAtIndex (int index)
             state.readerSource.reset();
             state.currentAudioFileIndex = -1;
             state.currentAudioFileName.clear();
+            state.currentTrackArtist.clear();
+            state.currentTrackAlbum.clear();
+            state.currentTrackArtwork = {};
             state.currentTrackDurationSeconds = 0.0;
             state.currentTrackTitle = "NO AUDIO";
             state.statusText = "no audio files in documents";
@@ -309,6 +370,9 @@ bool PlaybackController::loadAudioFileAtIndex (int index)
         state.currentAudioFileIndex = -1;
         state.currentAudioFileName = fallbackNoiseFile.getFullPathName();
         state.currentTrackTitle = "WHITE NOISE";
+        state.currentTrackArtist = "PLE";
+        state.currentTrackAlbum.clear();
+        state.currentTrackArtwork = {};
         state.statusText = "loaded white noise";
         return true;
     }
@@ -351,11 +415,18 @@ bool PlaybackController::loadAudioFile (const juce::File& file)
     if (reader == nullptr)
     {
         state.currentTrackDurationSeconds = 0.0;
+        state.currentTrackArtist.clear();
+        state.currentTrackAlbum.clear();
+        state.currentTrackArtwork = {};
         state.statusText = "failed to load " + file.getFileName().toLowerCase();
         return false;
     }
 
-    const auto metadataTitle = getMetadataValue (reader->metadataValues, { "TITLE", "Title", "title" });
+    auto metadataTitle = getMetadataValue (reader->metadataValues, { "TITLE", "Title", "title", "TIT2" });
+    auto metadataArtist = getMetadataValue (reader->metadataValues, { "ARTIST", "Artist", "artist", "ALBUMARTIST", "Album Artist", "album artist", "TPE1", "TPE2" });
+    auto metadataAlbum = getMetadataValue (reader->metadataValues, { "ALBUM", "Album", "album", "TALB" });
+    juce::Image metadataArtwork;
+    mergeNativeMetadata (file, metadataTitle, metadataArtist, metadataAlbum, metadataArtwork);
 
     const auto sampleRate = reader->sampleRate;
     state.currentTrackDurationSeconds = sampleRate > 0.0 ? static_cast<double> (reader->lengthInSamples) / sampleRate : 0.0;
@@ -378,6 +449,9 @@ bool PlaybackController::loadAudioFile (const juce::File& file)
     state.currentAudioFileName = file.getFullPathName();
     state.currentTrackTitle = metadataTitle.isNotEmpty() ? metadataTitle
                              : file.getFileNameWithoutExtension();
+    state.currentTrackArtist = metadataArtist;
+    state.currentTrackAlbum = metadataAlbum;
+    state.currentTrackArtwork = metadataArtwork;
 
     state.playbackFinishedHandled = false;
     state.statusText = "loaded " + state.currentTrackTitle.toLowerCase();
@@ -532,6 +606,11 @@ void PlaybackController::cyclePlaybackMode()
     state.statusText = "playback mode: " + getPlaybackModeLabel();
 }
 
+void PlaybackController::setPlaybackMode (PlaybackMode mode)
+{
+    state.playbackMode = mode;
+}
+
 void PlaybackController::startPlayback()
 {
     juce::Logger::writeToLog ("startPlayback requested for track: " + state.currentTrackTitle
@@ -578,12 +657,18 @@ void PlaybackController::pausePlayback()
     state.statusText = state.readerSource == nullptr ? "paused" : "paused " + state.currentTrackTitle.toLowerCase();
 }
 
-void PlaybackController::togglePlayback()
+void PlaybackController::seekTo (double positionSeconds)
 {
-    if (state.playbackIsPlaying)
-        pausePlayback();
-    else
-        startPlayback();
+    if (state.readerSource == nullptr)
+        return;
+
+    const auto targetPosition = state.currentTrackDurationSeconds > 0.0
+                              ? juce::jlimit (0.0, state.currentTrackDurationSeconds, positionSeconds)
+                              : juce::jmax (0.0, positionSeconds);
+
+    const juce::ScopedLock lock (state.audioSourceLock);
+    state.transportSource.setPosition (targetPosition);
+    state.playbackFinishedHandled = false;
 }
 
 void PlaybackController::handlePlaybackFinished()
@@ -660,6 +745,19 @@ bool PlaybackController::isPlaybackActive() const
     return state.playbackIsPlaying;
 }
 
+bool PlaybackController::hasCurrentTrackEnded() const
+{
+    if (! isPlaybackActive()
+        || state.playbackFinishedHandled
+        || state.currentTrackDurationSeconds <= 0.0
+        || state.transportSource.isPlaying())
+    {
+        return false;
+    }
+
+    return state.transportSource.getCurrentPosition() + 0.05 >= state.currentTrackDurationSeconds;
+}
+
 double PlaybackController::getCurrentPosition() const
 {
     return state.transportSource.getCurrentPosition();
@@ -685,24 +783,9 @@ int PlaybackController::getCurrentBlockSize() const
     return state.currentBlockSize;
 }
 
-const std::vector<juce::File>& PlaybackController::getAvailableAudioFiles() const
-{
-    return state.availableAudioFiles;
-}
-
-const std::vector<juce::File>& PlaybackController::getPlaybackQueue() const
-{
-    return state.playbackQueue;
-}
-
 juce::File PlaybackController::getAudioBrowserDirectory() const
 {
     return state.audioBrowserDirectory;
-}
-
-juce::File PlaybackController::getPlaybackScopeDirectory() const
-{
-    return state.playbackScopeDirectory;
 }
 
 void PlaybackController::setAudioBrowserDirectory (juce::File newDirectory)
@@ -715,19 +798,23 @@ void PlaybackController::setPlaybackScopeDirectory (juce::File newDirectory)
     state.playbackScopeDirectory = std::move (newDirectory);
 }
 
-int PlaybackController::getCurrentAudioFileIndex() const
-{
-    return state.currentAudioFileIndex;
-}
-
 juce::String PlaybackController::getCurrentAudioFileName() const
 {
     return state.currentAudioFileName;
 }
 
-juce::String PlaybackController::getCurrentTrackTitle() const
+NowPlayingTrack PlaybackController::getNowPlayingTrack() const
 {
-    return state.currentTrackTitle;
+    NowPlayingTrack track;
+    track.filePath = state.currentAudioFileName;
+    track.title = state.currentTrackTitle;
+    track.artist = state.currentTrackArtist;
+    track.album = state.currentTrackAlbum;
+    track.durationSeconds = state.currentTrackDurationSeconds;
+    track.elapsedSeconds = getCurrentPosition();
+    track.isPlaying = isPlaybackActive();
+    track.artwork = state.currentTrackArtwork;
+    return track;
 }
 
 std::shared_ptr<juce::AudioPluginInstance> PlaybackController::getPluginInstance() const

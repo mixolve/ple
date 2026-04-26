@@ -1,23 +1,23 @@
 #pragma once
 
-#include "Playback.h"
+#include "audio/PlaybackController.h"
 
 #include <functional>
 #include <memory>
 #include <vector>
 
-class BrowserController final
+class AudioBrowserController final
 {
 public:
     struct Dependencies
     {
         juce::Component& parentComponent;
-        ple::PlaybackState& playbackState;
         std::function<ple::PlaybackController*()> getPlaybackController;
         std::function<juce::File()> getAudioRootDirectory;
         std::function<juce::Rectangle<int>()> getAudioBrowserWindowBounds;
         std::function<void()> closePluginMenu;
         std::function<void()> closePluginWindow;
+        std::function<void()> closeNowPlayingWindow;
         std::function<bool (const juce::File&)> loadAudioFile;
         std::function<void()> startPlayback;
         std::function<void()> syncPlaybackUi;
@@ -25,7 +25,7 @@ public:
         std::function<void (const juce::String&)> setStatusText;
     };
 
-    BrowserController() = default;
+    AudioBrowserController() = default;
 
     void initialise (Dependencies dependencies);
     void reset();
@@ -39,10 +39,10 @@ public:
 
     bool isAudioBrowserVisible() const;
 
-    BrowserController (const BrowserController&) = delete;
-    BrowserController& operator= (const BrowserController&) = delete;
-    BrowserController (BrowserController&&) = delete;
-    BrowserController& operator= (BrowserController&&) = delete;
+    AudioBrowserController (const AudioBrowserController&) = delete;
+    AudioBrowserController& operator= (const AudioBrowserController&) = delete;
+    AudioBrowserController (AudioBrowserController&&) = delete;
+    AudioBrowserController& operator= (AudioBrowserController&&) = delete;
 
 private:
     struct AudioBrowserEntry
@@ -54,12 +54,12 @@ private:
     };
 
     juce::Component* parentComponent = nullptr;
-    ple::PlaybackState* playbackState = nullptr;
     std::function<ple::PlaybackController*()> getPlaybackController;
     std::function<juce::File()> getAudioRootDirectory;
     std::function<juce::Rectangle<int>()> getAudioBrowserWindowBounds;
     std::function<void()> closePluginMenu;
     std::function<void()> closePluginWindow;
+    std::function<void()> closeNowPlayingWindow;
     std::function<bool (const juce::File&)> loadAudioFile;
     std::function<void()> startPlayback;
     std::function<void()> syncPlaybackUi;

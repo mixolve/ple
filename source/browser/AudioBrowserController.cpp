@@ -1,19 +1,20 @@
-#include "Browser.h"
+#include "browser/AudioBrowserController.h"
 
-#include "Popups.h"
+#include "audio/AudioFiles.h"
+#include "ui/PopupViews.h"
 
 #include <algorithm>
 #include <utility>
 
-void BrowserController::initialise (Dependencies dependencies)
+void AudioBrowserController::initialise (Dependencies dependencies)
 {
     parentComponent = &dependencies.parentComponent;
-    playbackState = &dependencies.playbackState;
     getPlaybackController = std::move (dependencies.getPlaybackController);
     getAudioRootDirectory = std::move (dependencies.getAudioRootDirectory);
     getAudioBrowserWindowBounds = std::move (dependencies.getAudioBrowserWindowBounds);
     closePluginMenu = std::move (dependencies.closePluginMenu);
     closePluginWindow = std::move (dependencies.closePluginWindow);
+    closeNowPlayingWindow = std::move (dependencies.closeNowPlayingWindow);
     loadAudioFile = std::move (dependencies.loadAudioFile);
     startPlayback = std::move (dependencies.startPlayback);
     syncPlaybackUi = std::move (dependencies.syncPlaybackUi);
@@ -21,13 +22,13 @@ void BrowserController::initialise (Dependencies dependencies)
     setStatusText = std::move (dependencies.setStatusText);
 }
 
-void BrowserController::reset()
+void AudioBrowserController::reset()
 {
     closeAudioBrowser();
     audioBrowserEntries.clear();
 }
 
-void BrowserController::closeAudioBrowser()
+void AudioBrowserController::closeAudioBrowser()
 {
     if (audioBrowserHost != nullptr)
         audioBrowserHost->setVisible (false);
@@ -35,18 +36,21 @@ void BrowserController::closeAudioBrowser()
     audioBrowserHost.reset();
 }
 
-bool BrowserController::isAudioBrowserVisible() const
+bool AudioBrowserController::isAudioBrowserVisible() const
 {
     return audioBrowserHost != nullptr;
 }
 
-void BrowserController::browseAudioFiles()
+void AudioBrowserController::browseAudioFiles()
 {
     if (closePluginMenu)
         closePluginMenu();
 
     if (closePluginWindow)
         closePluginWindow();
+
+    if (closeNowPlayingWindow)
+        closeNowPlayingWindow();
 
     if (audioBrowserHost != nullptr)
     {
@@ -64,7 +68,7 @@ void BrowserController::browseAudioFiles()
     refreshAudioBrowserDirectory();
 }
 
-void BrowserController::refreshAudioBrowserDirectory()
+void AudioBrowserController::refreshAudioBrowserDirectory()
 {
     audioBrowserEntries.clear();
 
@@ -108,21 +112,8 @@ void BrowserController::refreshAudioBrowserDirectory()
 
     for (const auto& file : files)
     {
-        const auto extension = file.getFileExtension().toLowerCase();
-
-        if (extension == ".wav"
-            || extension == ".wave"
-            || extension == ".aif"
-            || extension == ".aiff"
-            || extension == ".mp3"
-            || extension == ".m4a"
-            || extension == ".aac"
-            || extension == ".caf"
-            || extension == ".flac"
-            || extension == ".ogg")
-        {
+        if (ple::isPlayableAudioFile (file))
             audioBrowserEntries.push_back ({ file, file.getFileName(), false, false });
-        }
     }
 
     const auto browserBounds = getAudioBrowserWindowBounds != nullptr ? getAudioBrowserWindowBounds()
@@ -194,7 +185,7 @@ void BrowserController::refreshAudioBrowserDirectory()
                                                                   : "browsing " + audioBrowserDirectory.getFileName());
 }
 
-void BrowserController::handleAudioBrowserSelection (int selectedIndex)
+void AudioBrowserController::handleAudioBrowserSelection (int selectedIndex)
 {
     if (selectedIndex < 0 || selectedIndex >= static_cast<int> (audioBrowserEntries.size()))
         return;
@@ -229,7 +220,7 @@ void BrowserController::handleAudioBrowserSelection (int selectedIndex)
         scheduleAudioBrowserDirectoryRefresh();
 }
 
-void BrowserController::handleAudioBrowserFolderPlaySelection (int selectedIndex)
+void AudioBrowserController::handleAudioBrowserFolderPlaySelection (int selectedIndex)
 {
     if (selectedIndex < 0 || selectedIndex >= static_cast<int> (audioBrowserEntries.size()))
         return;
@@ -244,7 +235,7 @@ void BrowserController::handleAudioBrowserFolderPlaySelection (int selectedIndex
     if (playbackController != nullptr)
     {
         playbackController->setPlaybackScopeDirectory (entry.file);
-        playbackState->playbackMode = ple::PlaybackMode::repeatFolder;
+        playbackController->setPlaybackMode (ple::PlaybackMode::repeatFolder);
         playbackController->refreshPlaybackQueue();
     }
 
@@ -267,7 +258,7 @@ void BrowserController::handleAudioBrowserFolderPlaySelection (int selectedIndex
         scheduleAudioBrowserDirectoryRefresh();
 }
 
-void BrowserController::resized()
+void AudioBrowserController::resized()
 {
     if (audioBrowserHost == nullptr)
         return;

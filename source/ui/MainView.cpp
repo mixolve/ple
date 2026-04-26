@@ -1,11 +1,8 @@
-#include "Panel.h"
+#include "ui/MainView.h"
 
 namespace
 {
 const auto uiAppBackground = juce::Colour (0xff000000);
-const auto uiGrey500 = juce::Colour (0xff707070);
-const auto uiWhite = juce::Colour (0xffffffff);
-const auto uiAccentBlue = juce::Colour (0xff9999ff);
 
 constexpr int uiButtonHeight = 30;
 constexpr int uiSectionGap = 8;
@@ -32,6 +29,8 @@ MainView::MainView (Action previousAction,
                     Action playbackModeAction,
                     Action choosePluginAction,
                     Action openPluginGuiAction,
+                    Action nowPlayingAction,
+                    Action aboutAction,
                     Action browseAction)
 {
     setOpaque (true);
@@ -47,7 +46,6 @@ MainView::MainView (Action previousAction,
 
     playButton.setButtonText ("PLAY");
     playButton.getProperties().set ("accent", "blue");
-    playButton.setClickingTogglesState (true);
     playButton.onClick = [action = std::move (playAction)]
     {
         if (action)
@@ -73,15 +71,14 @@ MainView::MainView (Action previousAction,
     };
     addAndMakeVisible (playbackModeButton);
 
-    choosePluginButton.setButtonText ("CHOOSE");
+    choosePluginButton.setButtonText ("LIST");
     choosePluginButton.onClick = [action = std::move (choosePluginAction)]
     {
         if (action)
             action();
     };
-    addAndMakeVisible (choosePluginButton);
 
-    openPluginGuiButton.setButtonText ("OPEN");
+    openPluginGuiButton.setButtonText ("PLUG");
     openPluginGuiButton.getProperties().set ("accent", "white");
     openPluginGuiButton.onClick = [action = std::move (openPluginGuiAction)]
     {
@@ -91,7 +88,16 @@ MainView::MainView (Action previousAction,
     openPluginGuiButton.setEnabled (false);
     addAndMakeVisible (openPluginGuiButton);
 
-    browseButton.setButtonText ("BROWSE");
+    nowButton.setButtonText ("NOW");
+    nowButton.getProperties().set ("accent", "white");
+    nowButton.onClick = [action = std::move (nowPlayingAction)]
+    {
+        if (action)
+            action();
+    };
+    addAndMakeVisible (nowButton);
+
+    browseButton.setButtonText ("BROW");
     browseButton.getProperties().set ("accent", "peach");
     browseButton.onClick = [action = std::move (browseAction)]
     {
@@ -106,14 +112,19 @@ MainView::MainView (Action previousAction,
     statusLabel.setVisible (false);
 
     footerButton.setButtonText ("PLE by MIXOLVE");
-    footerButton.getProperties().set ("accent", "white");
+    footerButton.getProperties().set ("accent", "grey");
+    footerButton.onClick = [action = std::move (aboutAction)]
+    {
+        if (action)
+            action();
+    };
     footerButton.setMouseClickGrabsKeyboardFocus (false);
     footerButton.setWantsKeyboardFocus (false);
     addAndMakeVisible (footerButton);
 
     setPlaybackActive (false);
 
-    for (auto* button : { &playbackModeButton, &previousButton, &playButton, &nextButton, &choosePluginButton, &openPluginGuiButton, &browseButton, &footerButton })
+    for (auto* button : { &playbackModeButton, &previousButton, &playButton, &nextButton, &choosePluginButton, &openPluginGuiButton, &nowButton, &browseButton, &footerButton })
     {
         button->setWantsKeyboardFocus (false);
         button->setMouseClickGrabsKeyboardFocus (false);
@@ -133,7 +144,8 @@ void MainView::setStatusText (const juce::String& text)
 void MainView::setPlaybackActive (bool isPlaying)
 {
     playButton.setButtonText (isPlaying ? "PAUSE" : "PLAY");
-    playButton.setToggleState (isPlaying, juce::dontSendNotification);
+    playButton.getProperties().set ("accentless", isPlaying);
+    playButton.getProperties().set ("accent", isPlaying ? "grey" : "blue");
 }
 
 void MainView::setChoosePluginEnabled (bool enabled)
@@ -159,6 +171,11 @@ juce::Rectangle<int> MainView::getContentArea() const
     return area;
 }
 
+juce::Rectangle<int> MainView::getChoosePluginButtonBounds() const
+{
+    return choosePluginButton.getBounds();
+}
+
 juce::Rectangle<int> MainView::getPluginWindowBounds() const
 {
     const auto area = getContentArea();
@@ -171,6 +188,11 @@ juce::Rectangle<int> MainView::getPluginWindowBounds() const
                                  top,
                                  juce::jmax (0, juce::jmin (area.getRight(), right) - left),
                                  juce::jmax (0, bottom - top));
+}
+
+juce::Rectangle<int> MainView::getNowPlayingWindowBounds() const
+{
+    return getPluginWindowBounds();
 }
 
 juce::Rectangle<int> MainView::getAudioBrowserWindowBounds() const
@@ -202,17 +224,20 @@ void MainView::resized()
 
     const auto buttonWidth = juce::jmax (0, (topRow.getWidth() - (uiButtonGap * 3)) / 4);
 
-    const auto bottomAvailableWidth = juce::jmax (0, topRowTotalWidth - (uiButtonGap * 2));
-    const auto bottomButtonWidth = bottomAvailableWidth / 3;
-    const auto bottomButtonRemainder = bottomAvailableWidth % 3;
+    const auto bottomAvailableWidth = juce::jmax (0, topRowTotalWidth - (uiButtonGap * 3));
+    const auto bottomButtonWidth = bottomAvailableWidth / 4;
+    const auto bottomButtonRemainder = bottomAvailableWidth % 4;
 
     const auto chooseWidth = bottomButtonWidth + (bottomButtonRemainder > 0 ? 1 : 0);
     const auto openWidth = bottomButtonWidth + (bottomButtonRemainder > 1 ? 1 : 0);
+    const auto nowWidth = bottomButtonWidth + (bottomButtonRemainder > 2 ? 1 : 0);
     const auto browseWidth = bottomButtonWidth;
 
     choosePluginButton.setBounds (bottomRow.removeFromLeft (chooseWidth));
     bottomRow.removeFromLeft (uiButtonGap);
     openPluginGuiButton.setBounds (bottomRow.removeFromLeft (openWidth));
+    bottomRow.removeFromLeft (uiButtonGap);
+    nowButton.setBounds (bottomRow.removeFromLeft (nowWidth));
     bottomRow.removeFromLeft (uiButtonGap);
     browseButton.setBounds (bottomRow.removeFromLeft (browseWidth));
 

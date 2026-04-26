@@ -14,6 +14,8 @@ public:
               Action playbackModeAction,
               Action choosePluginAction,
               Action openPluginGuiAction,
+              Action nowPlayingAction,
+              Action aboutAction,
               Action browseAction);
 
     void setPlaybackModeText (const juce::String& text);
@@ -24,7 +26,9 @@ public:
     void setOpenPluginGuiText (const juce::String& text);
 
     juce::Rectangle<int> getContentArea() const;
+    juce::Rectangle<int> getChoosePluginButtonBounds() const;
     juce::Rectangle<int> getPluginWindowBounds() const;
+    juce::Rectangle<int> getNowPlayingWindowBounds() const;
     juce::Rectangle<int> getAudioBrowserWindowBounds() const;
 
     void paint (juce::Graphics& g) override;
@@ -37,6 +41,7 @@ private:
     juce::TextButton playbackModeButton;
     juce::TextButton choosePluginButton;
     juce::TextButton openPluginGuiButton;
+    juce::TextButton nowButton;
     juce::TextButton browseButton;
     juce::Label statusLabel;
     juce::TextButton footerButton;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "audio/PlaybackController.h"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -8,7 +9,11 @@
 class PluginWindowFrame final : public juce::Component
 {
 public:
+    using PaintCallback = std::function<void()>;
+
     explicit PluginWindowFrame (std::unique_ptr<juce::Component> contentToOwn);
+
+    void setPaintCallback (PaintCallback callback);
 
     void paint (juce::Graphics& g) override;
     void resized() override;
@@ -17,6 +22,8 @@ public:
 
 private:
     std::unique_ptr<juce::Component> content;
+    PaintCallback paintCallback;
+    bool paintCallbackScheduled = false;
 };
 
 class GreyViewport final : public juce::Viewport
@@ -132,4 +139,37 @@ private:
 
     GreyViewport viewport;
     Surface surface;
+};
+
+class NowPlayingContent final : public juce::Component
+{
+public:
+    NowPlayingContent();
+
+    void setTrack (const ple::NowPlayingTrack& track);
+    void paint (juce::Graphics& g) override;
+
+private:
+    static juce::String formatTimeText (double seconds);
+
+    ple::NowPlayingTrack nowPlayingTrack;
+};
+
+class AboutContent final : public juce::Component
+{
+public:
+    AboutContent();
+
+    void paint (juce::Graphics& g) override;
+    void resized() override;
+    void mouseMove (const juce::MouseEvent& event) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent& event) override;
+
+private:
+    juce::String linkText;
+    juce::URL linkUrl;
+    juce::StringArray markdownLines;
+    std::vector<juce::Rectangle<int>> lineBounds;
+    juce::Rectangle<int> linkBounds;
 };

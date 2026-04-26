@@ -13,6 +13,18 @@ enum class PlaybackMode
     shuffleFolder
 };
 
+struct NowPlayingTrack final
+{
+    juce::String filePath;
+    juce::String title;
+    juce::String artist;
+    juce::String album;
+    double durationSeconds = 0.0;
+    double elapsedSeconds = 0.0;
+    bool isPlaying = false;
+    juce::Image artwork;
+};
+
 struct PlaybackState final
 {
     juce::AudioFormatManager formatManager;
@@ -24,7 +36,6 @@ struct PlaybackState final
     double currentSampleRate = 44100.0;
     int currentBlockSize = 512;
 
-    juce::AudioUnitPluginFormat audioUnitFormat;
     std::shared_ptr<juce::AudioPluginInstance> pluginInstance;
     juce::AudioBuffer<float> pluginScratchBuffer;
 
@@ -34,6 +45,9 @@ struct PlaybackState final
     int currentAudioFileIndex = -1;
     juce::String currentAudioFileName;
     juce::String currentTrackTitle { "NO AUDIO" };
+    juce::String currentTrackArtist;
+    juce::String currentTrackAlbum;
+    juce::Image currentTrackArtwork;
     double currentTrackDurationSeconds = 0.0;
     PlaybackMode playbackMode = PlaybackMode::repeatFolder;
     bool playbackIsPlaying = false;
@@ -55,38 +69,32 @@ public:
 
     void refreshAudioLibrary();
     void refreshPlaybackQueue();
-    bool loadAudioFileAtIndex (int index);
     bool loadAudioFile (const juce::File& file);
-    void restartCurrentTrack();
     void handlePlaybackFinished();
     void cyclePlaybackMode();
+    void setPlaybackMode (PlaybackMode mode);
     juce::String getPlaybackModeLabel() const;
-    int getTrackIndexForNavigation (bool movingForward) const;
     void startPlayback();
     void pausePlayback();
-    void togglePlayback();
+    void seekTo (double positionSeconds);
     void playPreviousTrack();
     void playNextTrack();
     std::vector<juce::File> getCurrentFolderTracks() const;
-    int getCurrentFolderTrackIndex (const std::vector<juce::File>& tracks) const;
 
     bool isPlaybackActive() const;
+    bool hasCurrentTrackEnded() const;
     double getCurrentPosition() const;
     double getDuration() const;
     juce::String getStatusText() const;
     double getCurrentSampleRate() const;
     int getCurrentBlockSize() const;
 
-    const std::vector<juce::File>& getAvailableAudioFiles() const;
-    const std::vector<juce::File>& getPlaybackQueue() const;
     juce::File getAudioBrowserDirectory() const;
-    juce::File getPlaybackScopeDirectory() const;
     void setAudioBrowserDirectory (juce::File newDirectory);
     void setPlaybackScopeDirectory (juce::File newDirectory);
 
-    int getCurrentAudioFileIndex() const;
     juce::String getCurrentAudioFileName() const;
-    juce::String getCurrentTrackTitle() const;
+    NowPlayingTrack getNowPlayingTrack() const;
 
     std::shared_ptr<juce::AudioPluginInstance> getPluginInstance() const;
     bool hasPluginInstance() const;
@@ -99,6 +107,11 @@ public:
     PlaybackController& operator= (PlaybackController&&) = delete;
 
 private:
+    bool loadAudioFileAtIndex (int index);
+    void restartCurrentTrack();
+    int getTrackIndexForNavigation (bool movingForward) const;
+    int getCurrentFolderTrackIndex (const std::vector<juce::File>& tracks) const;
+
     PlaybackState& state;
 };
 }

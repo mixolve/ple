@@ -1,4 +1,4 @@
-#include "LookAndFeel.h"
+#include "ui/PleLookAndFeel.h"
 
 #include "BinaryData.h"
 
@@ -118,6 +118,7 @@ public:
     {
         const auto bounds = button.getLocalBounds();
         const auto accentColour = getButtonAccentColour (button);
+        const auto suppressAccent = button.getProperties().getWithDefault ("accentless", false);
         const auto isActive = button.getToggleState();
 
         g.setColour (isButtonDown ? uiGrey700 : uiGrey800);
@@ -126,7 +127,9 @@ public:
         g.setColour (button.isEnabled() ? (isActive ? accentColour : uiGrey500) : uiGrey500);
         g.drawRect (bounds, 1);
 
-        if ((isActive || (isMouseOverButton && button.isEnabled() && ! isButtonDown)) && button.isEnabled())
+        if (! suppressAccent
+            && (isActive || (isMouseOverButton && button.isEnabled() && ! isButtonDown))
+            && button.isEnabled())
         {
             g.setColour (accentColour);
             g.drawRect (bounds.reduced (1), 1);

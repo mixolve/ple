@@ -1,5 +1,5 @@
 #include <JuceHeader.h>
-#include "App.h"
+#include "MainComponent.h"
 
 class PleApplication : public juce::JUCEApplication
 {
@@ -40,7 +40,8 @@ private:
             setTitleBarButtonsRequired (0, false);
             setTitleBarHeight (0);
             setContentOwned (new MainComponent(), true);
-            const auto userArea = juce::Desktop::getInstance().getDisplays().getMainDisplay().userArea;
+            const auto* primaryDisplay = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+            const auto userArea = primaryDisplay != nullptr ? primaryDisplay->userArea : juce::Rectangle<int>();
             setResizeLimits (userArea.getWidth(), 248, userArea.getWidth(), 248);
             setBounds (userArea.getX(), userArea.getY(), userArea.getWidth(), 248);
             setResizable (false, false);
