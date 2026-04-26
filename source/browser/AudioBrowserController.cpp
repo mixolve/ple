@@ -62,9 +62,6 @@ void AudioBrowserController::browseAudioFiles()
         return;
     }
 
-    if (auto* playbackController = getPlaybackController != nullptr ? getPlaybackController() : nullptr)
-        playbackController->setAudioBrowserDirectory (getAudioRootDirectory != nullptr ? getAudioRootDirectory() : juce::File());
-
     refreshAudioBrowserDirectory();
 }
 

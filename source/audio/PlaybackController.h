@@ -73,6 +73,7 @@ public:
     void handlePlaybackFinished();
     void cyclePlaybackMode();
     void setPlaybackMode (PlaybackMode mode);
+    void clearNavigationHistory();
     juce::String getPlaybackModeLabel() const;
     void startPlayback();
     void pausePlayback();
@@ -107,11 +108,13 @@ public:
     PlaybackController& operator= (PlaybackController&&) = delete;
 
 private:
-    bool loadAudioFileAtIndex (int index);
+    bool loadAudioFileAtIndex (int index, bool recordCurrentTrackInHistory = false);
     void restartCurrentTrack();
+    int getSequentialTrackIndexForNavigation (bool movingForward) const;
     int getTrackIndexForNavigation (bool movingForward) const;
     int getCurrentFolderTrackIndex (const std::vector<juce::File>& tracks) const;
 
+    std::vector<juce::String> navigationHistory;
     PlaybackState& state;
 };
 }

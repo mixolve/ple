@@ -144,15 +144,28 @@ private:
 class NowPlayingContent final : public juce::Component
 {
 public:
-    NowPlayingContent();
+    using SwipeCallback = std::function<void()>;
+
+    NowPlayingContent (SwipeCallback previousTrackAction = {},
+                       SwipeCallback nextTrackAction = {});
 
     void setTrack (const ple::NowPlayingTrack& track);
     void paint (juce::Graphics& g) override;
+    void mouseMove (const juce::MouseEvent& event) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent& event) override;
+    void mouseUp (const juce::MouseEvent& event) override;
 
 private:
     static juce::String formatTimeText (double seconds);
+    juce::Rectangle<int> getArtworkBounds() const;
 
     ple::NowPlayingTrack nowPlayingTrack;
+    SwipeCallback previousTrackAction;
+    SwipeCallback nextTrackAction;
+    juce::Point<float> swipeStartPosition;
+    bool swipeCandidate = false;
+    static constexpr int swipeThresholdPixels = 12;
 };
 
 class AboutContent final : public juce::Component

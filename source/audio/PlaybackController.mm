@@ -343,7 +343,7 @@ void PlaybackController::refreshPlaybackQueue()
         state.playbackQueue = state.availableAudioFiles;
 }
 
-bool PlaybackController::loadAudioFileAtIndex (int index)
+bool PlaybackController::loadAudioFileAtIndex (int index, bool recordCurrentTrackInHistory)
 {
     if (state.availableAudioFiles.empty())
     {
@@ -384,7 +384,50 @@ bool PlaybackController::loadAudioFileAtIndex (int index)
     else if (index >= fileCount)
         index %= fileCount;
 
-    return loadAudioFile (state.availableAudioFiles[static_cast<size_t> (index)]);
+    const auto historySizeBeforeLoad = navigationHistory.size();
+
+    if (recordCurrentTrackInHistory && state.currentAudioFileName.isNotEmpty())
+        navigationHistory.push_back (state.currentAudioFileName);
+
+    const auto loaded = loadAudioFile (state.availableAudioFiles[static_cast<size_t> (index)]);
+
+    if (! loaded && navigationHistory.size() > historySizeBeforeLoad)
+        navigationHistory.pop_back();
+
+    return loaded;
+}
+
+void PlaybackController::clearNavigationHistory()
+{
+    navigationHistory.clear();
+}
+
+int PlaybackController::getSequentialTrackIndexForNavigation (bool movingForward) const
+{
+    if (state.availableAudioFiles.empty())
+        return -1;
+
+    const auto folderTracks = getCurrentFolderTracks();
+
+    if (folderTracks.empty())
+        return state.currentAudioFileIndex;
+
+    const auto currentFolderIndex = getCurrentFolderTrackIndex (folderTracks);
+    const auto safeCurrentIndex = juce::jlimit (0,
+                                                static_cast<int> (folderTracks.size()) - 1,
+                                                currentFolderIndex < 0 ? 0 : currentFolderIndex);
+    const auto nextFolderIndex = (safeCurrentIndex + (movingForward ? 1 : static_cast<int> (folderTracks.size()) - 1))
+                               % static_cast<int> (folderTracks.size());
+
+    const auto& targetFile = folderTracks[static_cast<size_t> (nextFolderIndex)];
+
+    for (size_t index = 0; index < state.availableAudioFiles.size(); ++index)
+    {
+        if (state.availableAudioFiles[index].getFullPathName().equalsIgnoreCase (targetFile.getFullPathName()))
+            return static_cast<int> (index);
+    }
+
+    return state.currentAudioFileIndex;
 }
 
 bool PlaybackController::loadAudioFile (const juce::File& file)
@@ -465,7 +508,27 @@ bool PlaybackController::loadAudioFile (const juce::File& file)
 void PlaybackController::playPreviousTrack()
 {
     const auto shouldKeepPlaying = state.playbackIsPlaying;
-    const auto targetIndex = getTrackIndexForNavigation (false);
+
+    if (state.playbackMode == PlaybackMode::shuffleFolder)
+    {
+        while (! navigationHistory.empty())
+        {
+            const auto previousTrackPath = navigationHistory.back();
+            navigationHistory.pop_back();
+
+            if (previousTrackPath.isNotEmpty() && loadAudioFile (juce::File (previousTrackPath)))
+            {
+                if (shouldKeepPlaying)
+                    startPlayback();
+                else
+                    state.statusText = "loaded " + state.currentTrackTitle.toLowerCase();
+
+                return;
+            }
+        }
+    }
+
+    const auto targetIndex = getSequentialTrackIndexForNavigation (false);
 
     if (! loadAudioFileAtIndex (targetIndex))
         return;
@@ -481,7 +544,12 @@ void PlaybackController::playNextTrack()
     const auto shouldKeepPlaying = state.playbackIsPlaying;
     const auto targetIndex = getTrackIndexForNavigation (true);
 
-    if (! loadAudioFileAtIndex (targetIndex))
+    const auto shouldRecordHistory = state.playbackMode == PlaybackMode::shuffleFolder
+                                   && targetIndex >= 0
+                                   && targetIndex != state.currentAudioFileIndex
+                                   && ! state.availableAudioFiles.empty();
+
+    if (! loadAudioFileAtIndex (targetIndex, shouldRecordHistory))
         return;
 
     if (shouldKeepPlaying)
@@ -732,8 +800,17 @@ void PlaybackController::handlePlaybackFinished()
                 nextIndex = (currentIndex + 1) % static_cast<int> (folderTracks.size());
 
             juce::Logger::writeToLog ("handlePlaybackFinished -> shuffleFolder");
+            if (state.currentAudioFileName.isNotEmpty())
+                navigationHistory.push_back (state.currentAudioFileName);
+
             if (loadAudioFile (folderTracks[static_cast<size_t> (nextIndex)]))
+            {
                 startPlayback();
+            }
+            else if (! navigationHistory.empty())
+            {
+                navigationHistory.pop_back();
+            }
 
             break;
         }

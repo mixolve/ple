@@ -435,7 +435,9 @@ void MainComponent::openNowPlayingWindow()
     if (playbackController == nullptr || mainView == nullptr)
         return;
 
-    auto nowPlayingContentToOwn = std::make_unique<NowPlayingContent>();
+    auto nowPlayingContentToOwn = std::make_unique<NowPlayingContent> (
+        [this] { playPreviousTrack(); },
+        [this] { playNextTrack(); });
     nowPlayingContent = nowPlayingContentToOwn.get();
     nowPlayingContent->setTrack (playbackController->getNowPlayingTrack());
 
@@ -477,6 +479,9 @@ bool MainComponent::loadAudioFile (const juce::File& file)
         return false;
 
     const auto loaded = playbackController->loadAudioFile (file);
+
+    if (loaded)
+        playbackController->clearNavigationHistory();
 
     syncPlaybackUi();
 

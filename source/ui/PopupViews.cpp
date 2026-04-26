@@ -484,9 +484,13 @@ void FileBrowserContent::Surface::updateHoveredRow (float y)
     }
 }
 
-NowPlayingContent::NowPlayingContent()
+NowPlayingContent::NowPlayingContent (SwipeCallback previousTrackActionToOwn,
+                                      SwipeCallback nextTrackActionToOwn)
+    : previousTrackAction (std::move (previousTrackActionToOwn))
+    , nextTrackAction (std::move (nextTrackActionToOwn))
 {
     setOpaque (true);
+    setInterceptsMouseClicks (true, false);
 }
 
 void NowPlayingContent::setTrack (const ple::NowPlayingTrack& track)
@@ -528,26 +532,7 @@ void NowPlayingContent::paint (juce::Graphics& g)
 
     const auto textLineHeight = juce::roundToInt (popupUiFontSize);
     const auto textGap = 6;
-    const auto maxArtworkWidth = juce::jmax (1, juce::roundToInt (contentArea.getWidth() * 0.9f));
-    const auto maxArtworkHeight = juce::jmax (1, contentArea.getHeight() - (textLineHeight * 2) - textGap);
-    const auto artworkAspectRatio = nowPlayingTrack.artwork.isValid() && nowPlayingTrack.artwork.getHeight() > 0
-                                        ? (float) nowPlayingTrack.artwork.getWidth() / (float) nowPlayingTrack.artwork.getHeight()
-                                        : 1.0f;
-
-    auto artworkArea = juce::Rectangle<float> (0.0f, 0.0f, (float) maxArtworkWidth, (float) maxArtworkHeight);
-
-    if (artworkArea.getWidth() / artworkArea.getHeight() > artworkAspectRatio)
-        artworkArea.setWidth (artworkArea.getHeight() * artworkAspectRatio);
-    else
-        artworkArea.setHeight (artworkArea.getWidth() / artworkAspectRatio);
-
-    const auto blockHeight = juce::roundToInt (artworkArea.getHeight()) + textGap + (textLineHeight * 2);
-    const auto blockTop = contentArea.getY() + juce::jmax (0, (contentArea.getHeight() - blockHeight) / 2);
-
-    artworkArea.setX ((float) contentArea.getCentreX() - (artworkArea.getWidth() / 2.0f));
-    artworkArea.setY ((float) blockTop);
-
-    const auto artworkBounds = artworkArea.toNearestInt();
+    const auto artworkBounds = getArtworkBounds();
 
     g.setColour (popupUiGrey700);
     g.fillRect (artworkBounds);
@@ -575,6 +560,76 @@ void NowPlayingContent::paint (juce::Graphics& g)
     g.setFont (makePopupUiFont());
     g.drawFittedText (title.toUpperCase(), titleArea, juce::Justification::centred, 1, 1.0f);
     g.drawFittedText (subtitle.toUpperCase(), subtitleArea, juce::Justification::centred, 1, 1.0f);
+}
+
+juce::Rectangle<int> NowPlayingContent::getArtworkBounds() const
+{
+    auto contentArea = getLocalBounds().reduced (4, 4);
+    const auto textLineHeight = juce::roundToInt (popupUiFontSize);
+    const auto textGap = 6;
+    const auto maxArtworkWidth = juce::jmax (1, juce::roundToInt (contentArea.getWidth() * 0.9f));
+    const auto maxArtworkHeight = juce::jmax (1, contentArea.getHeight() - (textLineHeight * 2) - textGap);
+    const auto artworkAspectRatio = nowPlayingTrack.artwork.isValid() && nowPlayingTrack.artwork.getHeight() > 0
+                                        ? (float) nowPlayingTrack.artwork.getWidth() / (float) nowPlayingTrack.artwork.getHeight()
+                                        : 1.0f;
+
+    auto artworkArea = juce::Rectangle<float> (0.0f, 0.0f, (float) maxArtworkWidth, (float) maxArtworkHeight);
+
+    if (artworkArea.getWidth() / artworkArea.getHeight() > artworkAspectRatio)
+        artworkArea.setWidth (artworkArea.getHeight() * artworkAspectRatio);
+    else
+        artworkArea.setHeight (artworkArea.getWidth() / artworkAspectRatio);
+
+    const auto blockHeight = juce::roundToInt (artworkArea.getHeight()) + textGap + (textLineHeight * 2);
+    const auto blockTop = contentArea.getY() + juce::jmax (0, (contentArea.getHeight() - blockHeight) / 2);
+
+    artworkArea.setX ((float) contentArea.getCentreX() - (artworkArea.getWidth() / 2.0f));
+    artworkArea.setY ((float) blockTop);
+
+    return artworkArea.toNearestInt();
+}
+
+void NowPlayingContent::mouseMove (const juce::MouseEvent& event)
+{
+    setMouseCursor (getArtworkBounds().contains (event.getPosition())
+                        ? juce::MouseCursor::PointingHandCursor
+                        : juce::MouseCursor::NormalCursor);
+}
+
+void NowPlayingContent::mouseExit (const juce::MouseEvent&)
+{
+    setMouseCursor (juce::MouseCursor::NormalCursor);
+}
+
+void NowPlayingContent::mouseDown (const juce::MouseEvent& event)
+{
+    swipeCandidate = getArtworkBounds().contains (event.getPosition());
+    swipeStartPosition = event.position;
+}
+
+void NowPlayingContent::mouseUp (const juce::MouseEvent& event)
+{
+    if (! swipeCandidate)
+        return;
+
+    swipeCandidate = false;
+
+    const auto deltaX = event.position.x - swipeStartPosition.x;
+    const auto deltaY = event.position.y - swipeStartPosition.y;
+
+    if (std::abs (deltaX) < swipeThresholdPixels || std::abs (deltaX) < std::abs (deltaY))
+        return;
+
+    if (deltaX < 0.0f)
+    {
+        if (nextTrackAction)
+            nextTrackAction();
+    }
+    else
+    {
+        if (previousTrackAction)
+            previousTrackAction();
+    }
 }
 
 AboutContent::AboutContent()
