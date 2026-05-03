@@ -1,8 +1,19 @@
 #include "audio/AudioFiles.h"
+#include "BinaryData.h"
 
 juce::File ple::getAudioRootDirectory()
 {
-    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+    const auto documentsDirectory = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+    const auto readmeFile = documentsDirectory.getChildFile ("readme.md");
+
+    // Keep a visible file in Documents so the app shows up in Files.
+    if (! readmeFile.exists())
+    {
+        const auto readmeText = juce::String::fromUTF8 (BinaryData::readme_md, BinaryData::readme_mdSize);
+        readmeFile.replaceWithText (readmeText);
+    }
+
+    return documentsDirectory;
 }
 
 bool ple::isPlayableAudioFile (const juce::File& file)
