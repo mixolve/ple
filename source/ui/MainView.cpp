@@ -148,11 +148,6 @@ void MainView::setPlaybackActive (bool isPlaying)
     playButton.getProperties().set ("accent", isPlaying ? "grey" : "blue");
 }
 
-void MainView::setChoosePluginEnabled (bool enabled)
-{
-    choosePluginButton.setEnabled (enabled);
-}
-
 void MainView::setOpenPluginGuiEnabled (bool enabled)
 {
     openPluginGuiButton.setEnabled (enabled);
@@ -180,9 +175,9 @@ juce::Rectangle<int> MainView::getPluginWindowBounds() const
 {
     const auto area = getContentArea();
     const auto left = playbackModeButton.getX();
-    const auto top = previousButton.getBottom() + uiPluginWindowGap;
+    const auto top = area.getY();
     const auto right = nextButton.getRight();
-    const auto bottom = choosePluginButton.getY() - uiPluginWindowGap;
+    const auto bottom = playbackModeButton.getY() - uiPluginWindowGap;
 
     return juce::Rectangle<int> (left,
                                  top,
@@ -219,33 +214,25 @@ void MainView::resized()
     area.removeFromBottom (uiSectionGap);
 
     auto bottomRow = area.removeFromBottom (uiButtonHeight);
-    auto topRow = area.removeFromTop (uiButtonHeight);
-    const auto topRowTotalWidth = topRow.getWidth();
-
+    area.removeFromBottom (uiPluginWindowGap);
+    auto topRow = area.removeFromBottom (uiButtonHeight);
     const auto buttonWidth = juce::jmax (0, (topRow.getWidth() - (uiButtonGap * 3)) / 4);
 
-    const auto bottomAvailableWidth = juce::jmax (0, topRowTotalWidth - (uiButtonGap * 3));
-    const auto bottomButtonWidth = bottomAvailableWidth / 4;
-    const auto bottomButtonRemainder = bottomAvailableWidth % 4;
+    const auto layoutRow = [buttonWidth] (juce::Rectangle<int> row,
+                                          juce::Button& first,
+                                          juce::Button& second,
+                                          juce::Button& third,
+                                          juce::Button& fourth)
+    {
+        first.setBounds (row.removeFromLeft (buttonWidth));
+        row.removeFromLeft (uiButtonGap);
+        second.setBounds (row.removeFromLeft (buttonWidth));
+        row.removeFromLeft (uiButtonGap);
+        third.setBounds (row.removeFromLeft (buttonWidth));
+        row.removeFromLeft (uiButtonGap);
+        fourth.setBounds (row.removeFromLeft (buttonWidth));
+    };
 
-    const auto chooseWidth = bottomButtonWidth + (bottomButtonRemainder > 0 ? 1 : 0);
-    const auto openWidth = bottomButtonWidth + (bottomButtonRemainder > 1 ? 1 : 0);
-    const auto nowWidth = bottomButtonWidth + (bottomButtonRemainder > 2 ? 1 : 0);
-    const auto browseWidth = bottomButtonWidth;
-
-    choosePluginButton.setBounds (bottomRow.removeFromLeft (chooseWidth));
-    bottomRow.removeFromLeft (uiButtonGap);
-    openPluginGuiButton.setBounds (bottomRow.removeFromLeft (openWidth));
-    bottomRow.removeFromLeft (uiButtonGap);
-    nowButton.setBounds (bottomRow.removeFromLeft (nowWidth));
-    bottomRow.removeFromLeft (uiButtonGap);
-    browseButton.setBounds (bottomRow.removeFromLeft (browseWidth));
-
-    playbackModeButton.setBounds (topRow.removeFromLeft (buttonWidth));
-    topRow.removeFromLeft (uiButtonGap);
-    previousButton.setBounds (topRow.removeFromLeft (buttonWidth));
-    topRow.removeFromLeft (uiButtonGap);
-    playButton.setBounds (topRow.removeFromLeft (buttonWidth));
-    topRow.removeFromLeft (uiButtonGap);
-    nextButton.setBounds (topRow);
+    layoutRow (topRow, playbackModeButton, previousButton, playButton, nextButton);
+    layoutRow (bottomRow, choosePluginButton, openPluginGuiButton, nowButton, browseButton);
 }

@@ -42,12 +42,14 @@ private:
     void ensureAudioOutputActive();
     void suspendAudioOutputForPause();
     void seekPlayback (double positionSeconds);
+    void seekPlaybackBy (double deltaSeconds);
     void togglePlayback();
     void playPreviousTrack();
     void playNextTrack();
     void choosePlugin();
     void browseAudioFiles();
     void refreshAudioBrowserDirectory();
+    void removeAudioFile (const juce::File& file);
     void openPluginGui();
     void openAboutWindow();
     void closeAboutWindow();
@@ -58,7 +60,6 @@ private:
     void scheduleAudioBrowserDirectoryRefresh();
     void setStatusText (const juce::String& text);
     void setPlaybackModeText (const juce::String& text);
-    void setChoosePluginEnabled (bool enabled);
     void setOpenPluginGuiEnabled (bool enabled);
     void setOpenPluginGuiText (const juce::String& text);
 

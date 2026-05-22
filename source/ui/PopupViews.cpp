@@ -8,6 +8,7 @@ const auto popupUiGrey700 = juce::Colour (0xff363636);
 const auto popupUiGrey500 = juce::Colour (0xff707070);
 const auto popupUiWhite = juce::Colour (0xffffffff);
 const auto popupUiAccentPeach = juce::Colour (0xffffcc99);
+const auto popupUiMarkedGrey = juce::Colour (0xff9a9a9a);
 
 constexpr int popupUiButtonHeight = 30;
 constexpr int popupUiListTopInset = 8;
@@ -16,6 +17,9 @@ constexpr int popupUiListBottomInset = 8;
 constexpr int popupUiListRowGap = 8;
 constexpr int popupUiListRowPitch = popupUiButtonHeight + popupUiListRowGap;
 constexpr float popupUiFontSize = 22.0f;
+constexpr int popupUiActionWidth = 96;
+constexpr int popupUiActionHeight = 28;
+constexpr int popupUiActionGap = 8;
 
 juce::Font makePopupUiFont (const bool bold = false, const float height = popupUiFontSize)
 {
@@ -238,7 +242,8 @@ void PluginMenuContent::Surface::updateHoveredRow (float y)
 
 FileBrowserContent::FileBrowserContent (std::vector<Row> items,
                                         SelectionCallback selectionCallback,
-                                        FolderPlayCallback folderPlayCallback)
+                                        FolderPlayCallback folderPlayCallback,
+                                        LongPressCallback longPressCallback)
 {
     setOpaque (true);
     addAndMakeVisible (viewport);
@@ -250,7 +255,7 @@ FileBrowserContent::FileBrowserContent (std::vector<Row> items,
 
     surface.setOpaque (true);
 
-    surface.setRows (std::move (items), std::move (selectionCallback), std::move (folderPlayCallback));
+    surface.setRows (std::move (items), std::move (selectionCallback), std::move (folderPlayCallback), std::move (longPressCallback));
 }
 
 void FileBrowserContent::setRows (std::vector<Row> items)
@@ -270,16 +275,22 @@ void FileBrowserContent::resized()
 
 void FileBrowserContent::Surface::setRows (const std::vector<Row>& items,
                                            SelectionCallback callback,
-                                           FolderPlayCallback folderPlayCallback)
+                                           FolderPlayCallback folderPlayCallback,
+                                           LongPressCallback longPressCallback)
 {
     rows = items;
     onSelect = std::move (callback);
     onPlayFolder = std::move (folderPlayCallback);
+    onLongPress = std::move (longPressCallback);
     hoveredIndex = -1;
     hoveredPlayIndex = -1;
     pressedIndex = -1;
     pressedOnPlayButton = false;
     tapCandidate = false;
+    longPressCandidate = false;
+    longPressTriggered = false;
+    pressedRowPointerInside = false;
+    stopTimer();
     repaint();
 }
 
@@ -291,6 +302,10 @@ void FileBrowserContent::Surface::setRows (std::vector<Row> items)
     pressedIndex = -1;
     pressedOnPlayButton = false;
     tapCandidate = false;
+    longPressCandidate = false;
+    longPressTriggered = false;
+    pressedRowPointerInside = false;
+    stopTimer();
     repaint();
 }
 
@@ -307,16 +322,36 @@ void FileBrowserContent::Surface::paint (juce::Graphics& g)
     g.setColour (popupUiGrey800);
     g.fillAll();
 
-    for (size_t index = 0; index < rows.size(); ++index)
-    {
-        const auto rowBounds = getRowBoundsForIndex (static_cast<int> (index));
+    const auto rowCount = static_cast<int> (rows.size());
 
-        const auto isHighlighted = static_cast<int> (index) == hoveredIndex;
-        const auto isSelected = rows[index].isSelected;
-        const auto isPathActive = rows[index].isPathActive;
+    if (rowCount <= 0)
+        return;
+
+    const auto clipBounds = g.getClipBounds();
+    const auto firstVisibleRow = juce::jlimit (0,
+                                               rowCount - 1,
+                                               juce::jmax (0, ((clipBounds.getY() - popupUiListTopInset) / popupUiListRowPitch) - 1));
+    const auto lastVisibleRow = juce::jlimit (0,
+                                              rowCount - 1,
+                                              juce::jmax (0, ((clipBounds.getBottom() - popupUiListTopInset) / popupUiListRowPitch) + 1));
+
+    g.setFont (makePopupUiFont());
+
+    for (int index = firstVisibleRow; index <= lastVisibleRow; ++index)
+    {
+        const auto rowBounds = getRowBoundsForIndex (index);
+
+        if (! clipBounds.intersects (rowBounds))
+            continue;
+
+        const auto& row = rows[static_cast<size_t> (index)];
+        const auto isHighlighted = index == hoveredIndex;
+        const auto isSelected = row.isSelected;
+        const auto isPathActive = row.isPathActive;
+        const auto isMarked = row.isMarked;
         const auto hasAccent = isSelected || isPathActive;
-        const auto hasFolderPlayButton = rows[index].isDirectory;
-        const auto isPressed = static_cast<int> (index) == pressedIndex;
+        const auto hasFolderPlayButton = row.isDirectory;
+        const auto isPressed = index == pressedIndex;
 
         auto labelArea = rowBounds;
         juce::Rectangle<int> playArea;
@@ -336,7 +371,7 @@ void FileBrowserContent::Surface::paint (juce::Graphics& g)
         {
             const auto isPlayActive = isPathActive;
             const auto isPlayPressed = isPressed && pressedOnPlayButton;
-            g.setColour (isPlayActive || (isHighlighted && hoveredPlayIndex == static_cast<int> (index)) || isPlayPressed ? popupUiGrey700 : popupUiGrey800);
+            g.setColour (isPlayActive || (isHighlighted && hoveredPlayIndex == index) || isPlayPressed ? popupUiGrey700 : popupUiGrey800);
             g.fillRect (playArea);
             g.setColour (isPlayPressed ? popupUiGrey500 : isPlayActive ? popupUiAccentPeach : popupUiGrey500);
             g.drawRect (playArea, 1);
@@ -353,21 +388,30 @@ void FileBrowserContent::Surface::paint (juce::Graphics& g)
             g.fillPath (triangle);
         }
 
-        g.setColour (popupUiWhite);
-        g.setFont (makePopupUiFont());
-        g.drawText (rows[index].label.toUpperCase(), labelArea.reduced (10, 0), juce::Justification::centredLeft, true);
+        g.setColour (isMarked ? popupUiMarkedGrey : popupUiWhite);
+        g.drawText (row.label.toUpperCase(), labelArea.reduced (10, 0), juce::Justification::centredLeft, true);
     }
 }
 
 void FileBrowserContent::Surface::mouseMove (const juce::MouseEvent& event)
 {
+    const auto previousHoveredPlayIndex = hoveredPlayIndex;
     hoveredPlayIndex = getPlayButtonRowIndexForPosition (event.position);
+
+    if (hoveredPlayIndex != previousHoveredPlayIndex)
+    {
+        repaintRow (previousHoveredPlayIndex);
+        repaintRow (hoveredPlayIndex);
+    }
+
     updateHoveredRow (event.position.y);
 }
 
 void FileBrowserContent::Surface::mouseExit (const juce::MouseEvent&)
 {
+    const auto previousHoveredPlayIndex = hoveredPlayIndex;
     hoveredPlayIndex = -1;
+    repaintRow (previousHoveredPlayIndex);
     updateHoveredRow (-1.0f);
 }
 
@@ -376,8 +420,15 @@ void FileBrowserContent::Surface::mouseDown (const juce::MouseEvent& event)
     pressedIndex = getRowIndexForY (event.position.y);
     pressPosition = event.position;
     pressedOnPlayButton = pressedIndex >= 0 && isPlayButtonHit (pressedIndex, event.position.x);
-    tapCandidate = true;
-    repaint();
+    tapCandidate = pressedIndex >= 0;
+    longPressCandidate = tapCandidate && ! pressedOnPlayButton;
+    longPressTriggered = false;
+    pressedRowPointerInside = tapCandidate;
+
+    if (longPressCandidate)
+        startTimer (longPressThresholdMs);
+
+    repaintRow (pressedIndex);
 }
 
 void FileBrowserContent::Surface::mouseDrag (const juce::MouseEvent& event)
@@ -387,16 +438,34 @@ void FileBrowserContent::Surface::mouseDrag (const juce::MouseEvent& event)
 
     if (event.position.getDistanceFrom (pressPosition) > (float) tapThresholdPixels)
     {
-        pressedIndex = -1;
-        pressedOnPlayButton = false;
-        tapCandidate = false;
-        repaint();
+        const auto rowIndex = getRowIndexForY (event.position.y);
+
+        if (longPressCandidate && rowIndex == pressedIndex)
+        {
+            if (! pressedRowPointerInside)
+            {
+                pressedRowPointerInside = true;
+                repaintRow (pressedIndex);
+            }
+
+            return;
+        }
+
+        resetPressState();
     }
 }
 
 void FileBrowserContent::Surface::mouseUp (const juce::MouseEvent& event)
 {
     const auto rowIndex = getRowIndexForY (event.position.y);
+
+    stopTimer();
+
+    if (longPressTriggered)
+    {
+        resetPressState();
+        return;
+    }
 
     if (tapCandidate && rowIndex >= 0 && rowIndex == pressedIndex)
     {
@@ -411,10 +480,22 @@ void FileBrowserContent::Surface::mouseUp (const juce::MouseEvent& event)
         }
     }
 
-    pressedIndex = -1;
-    pressedOnPlayButton = false;
+    resetPressState();
+}
+
+void FileBrowserContent::Surface::timerCallback()
+{
+    stopTimer();
+
+    if (! longPressCandidate || pressedIndex < 0 || pressedOnPlayButton || ! pressedRowPointerInside)
+        return;
+
+    longPressTriggered = true;
+    longPressCandidate = false;
     tapCandidate = false;
-    repaint();
+
+    if (onLongPress)
+        onLongPress (pressedIndex);
 }
 
 juce::Rectangle<int> FileBrowserContent::Surface::getRowBoundsForIndex (int index) const
@@ -473,21 +554,196 @@ bool FileBrowserContent::Surface::isPlayButtonHit (int rowIndex, float x) const 
     return x >= (float) playStartX;
 }
 
+void FileBrowserContent::Surface::repaintRow (int rowIndex)
+{
+    if (! juce::isPositiveAndBelow (rowIndex, static_cast<int> (rows.size())))
+        return;
+
+    repaint (getRowBoundsForIndex (rowIndex).expanded (1, 0));
+}
+
 void FileBrowserContent::Surface::updateHoveredRow (float y)
 {
     const auto nextHoveredIndex = getRowIndexForY (y);
 
     if (hoveredIndex != nextHoveredIndex)
     {
+        const auto previousHoveredIndex = hoveredIndex;
         hoveredIndex = nextHoveredIndex;
-        repaint();
+        repaintRow (previousHoveredIndex);
+        repaintRow (hoveredIndex);
     }
 }
 
+void FileBrowserContent::Surface::resetPressState()
+{
+    const auto previousPressedIndex = pressedIndex;
+    stopTimer();
+    pressedIndex = -1;
+    pressedOnPlayButton = false;
+    tapCandidate = false;
+    longPressCandidate = false;
+    longPressTriggered = false;
+    pressedRowPointerInside = false;
+    repaintRow (previousPressedIndex);
+}
+
+BrowserActionContent::BrowserActionContent (juce::String fileLabelToOwn,
+                                            bool isMarkedToOwn,
+                                            bool canRemoveToOwn,
+                                            ActionCallback removeCallbackToOwn,
+                                            ActionCallback toggleMarkCallbackToOwn,
+                                            ActionCallback dismissCallbackToOwn)
+    : fileLabel (std::move (fileLabelToOwn))
+    , isMarked (isMarkedToOwn)
+    , canRemove (canRemoveToOwn)
+    , removeCallback (std::move (removeCallbackToOwn))
+    , toggleMarkCallback (std::move (toggleMarkCallbackToOwn))
+    , dismissCallback (std::move (dismissCallbackToOwn))
+{
+    setOpaque (true);
+    setInterceptsMouseClicks (true, true);
+}
+
+void BrowserActionContent::resized()
+{
+    auto area = getLocalBounds().reduced (10);
+    titleBounds = area.removeFromTop (36);
+    area.removeFromTop (8);
+
+    auto buttonsArea = area.removeFromTop (popupUiActionHeight);
+    removeButtonBounds = buttonsArea.removeFromLeft (popupUiActionWidth);
+    buttonsArea.removeFromLeft (popupUiActionGap);
+    markButtonBounds = buttonsArea.removeFromLeft (popupUiActionWidth);
+}
+
+void BrowserActionContent::paint (juce::Graphics& g)
+{
+    g.setColour (popupUiGrey800);
+    g.fillAll();
+
+    g.setFont (makePopupUiFont());
+    g.setColour (popupUiWhite);
+    g.drawFittedText (fileLabel.toUpperCase(), titleBounds, juce::Justification::centred, 1, 1.0f);
+
+    g.setColour (popupUiGrey700);
+    g.fillRect (removeButtonBounds);
+    g.fillRect (markButtonBounds);
+
+    g.setColour (popupUiGrey500);
+    g.drawRect (removeButtonBounds, 1);
+    g.drawRect (markButtonBounds, 1);
+
+    g.setColour (popupUiWhite);
+    g.drawFittedText (canRemove ? (removeLongPressReady ? "SURE?" : "REMOVE") : "LOCKED",
+                       removeButtonBounds,
+                       juce::Justification::centred,
+                       1,
+                       1.0f);
+    g.drawFittedText (isMarked ? "UNMARK" : "MARK", markButtonBounds, juce::Justification::centred, 1, 1.0f);
+}
+
+void BrowserActionContent::mouseMove (const juce::MouseEvent& event)
+{
+    removePointerInside = isInsideRemoveButton (event.position);
+    markPointerInside = isInsideMarkButton (event.position);
+
+    const auto cursor = isInsideRemoveButton (event.position) || isInsideMarkButton (event.position)
+                        ? juce::MouseCursor::PointingHandCursor
+                        : juce::MouseCursor::NormalCursor;
+
+    setMouseCursor (cursor);
+}
+
+void BrowserActionContent::mouseExit (const juce::MouseEvent&)
+{
+    setMouseCursor (juce::MouseCursor::NormalCursor);
+    removePointerInside = false;
+    markPointerInside = false;
+}
+
+void BrowserActionContent::mouseDown (const juce::MouseEvent& event)
+{
+    pressPosition = event.position;
+    removePressed = isInsideRemoveButton (event.position);
+    markPressed = isInsideMarkButton (event.position);
+    removePointerInside = removePressed;
+    markPointerInside = markPressed;
+
+    if (removePressed && canRemove)
+        startTimer (1000);
+}
+
+void BrowserActionContent::mouseDrag (const juce::MouseEvent& event)
+{
+    removePointerInside = isInsideRemoveButton (event.position);
+    markPointerInside = isInsideMarkButton (event.position);
+}
+
+void BrowserActionContent::mouseUp (const juce::MouseEvent& event)
+{
+    stopTimer();
+
+    const auto insideRemove = isInsideRemoveButton (event.position);
+    const auto insideMark = isInsideMarkButton (event.position);
+    auto shouldDismiss = false;
+
+    if (removeLongPressReady && insideRemove && removeCallback != nullptr)
+    {
+        removeCallback();
+        shouldDismiss = true;
+    }
+    else if (markPressed && insideMark && toggleMarkCallback != nullptr)
+    {
+        toggleMarkCallback();
+        shouldDismiss = true;
+    }
+
+    if (shouldDismiss && dismissCallback != nullptr)
+        dismissCallback();
+
+    resetPressState();
+    repaint();
+}
+
+void BrowserActionContent::timerCallback()
+{
+    stopTimer();
+
+    if (! removePressed || ! canRemove)
+        return;
+
+    removeLongPressReady = true;
+    repaint();
+}
+bool BrowserActionContent::isInsideRemoveButton (juce::Point<float> position) const noexcept
+{
+    return removeButtonBounds.contains (position.toInt());
+}
+
+bool BrowserActionContent::isInsideMarkButton (juce::Point<float> position) const noexcept
+{
+    return markButtonBounds.contains (position.toInt());
+}
+
+void BrowserActionContent::resetPressState()
+{
+    stopTimer();
+    removePressed = false;
+    removeLongPressReady = false;
+    removePointerInside = false;
+    markPressed = false;
+    markPointerInside = false;
+}
+
 NowPlayingContent::NowPlayingContent (SwipeCallback previousTrackActionToOwn,
-                                      SwipeCallback nextTrackActionToOwn)
+                                      SwipeCallback nextTrackActionToOwn,
+                                      SeekCallback seekBackwardActionToOwn,
+                                      SeekCallback seekForwardActionToOwn)
     : previousTrackAction (std::move (previousTrackActionToOwn))
     , nextTrackAction (std::move (nextTrackActionToOwn))
+    , seekBackwardAction (std::move (seekBackwardActionToOwn))
+    , seekForwardAction (std::move (seekForwardActionToOwn))
 {
     setOpaque (true);
     setInterceptsMouseClicks (true, false);
@@ -556,8 +812,23 @@ void NowPlayingContent::paint (juce::Graphics& g)
     auto titleArea = textArea.removeFromTop (textLineHeight);
     auto subtitleArea = textArea.removeFromTop (textLineHeight);
 
+    const auto seekBackwardBounds = getSeekBackwardBounds();
+    const auto seekForwardBounds = getSeekForwardBounds();
+
+    g.setColour (seekBackwardPressed ? popupUiGrey700 : popupUiGrey800);
+    g.fillRect (seekBackwardBounds);
+    g.setColour (popupUiGrey500);
+    g.drawRect (seekBackwardBounds, 1);
+
+    g.setColour (seekForwardPressed ? popupUiGrey700 : popupUiGrey800);
+    g.fillRect (seekForwardBounds);
+    g.setColour (popupUiGrey500);
+    g.drawRect (seekForwardBounds, 1);
+
     g.setColour (popupUiWhite);
     g.setFont (makePopupUiFont());
+    g.drawFittedText ("-15", seekBackwardBounds, juce::Justification::centred, 1, 1.0f);
+    g.drawFittedText ("+15", seekForwardBounds, juce::Justification::centred, 1, 1.0f);
     g.drawFittedText (title.toUpperCase(), titleArea, juce::Justification::centred, 1, 1.0f);
     g.drawFittedText (subtitle.toUpperCase(), subtitleArea, juce::Justification::centred, 1, 1.0f);
 }
@@ -567,8 +838,9 @@ juce::Rectangle<int> NowPlayingContent::getArtworkBounds() const
     auto contentArea = getLocalBounds().reduced (4, 4);
     const auto textLineHeight = juce::roundToInt (popupUiFontSize);
     const auto textGap = 6;
+    const auto actionAreaHeight = popupUiActionHeight + popupUiListBottomInset + textGap;
     const auto maxArtworkWidth = juce::jmax (1, juce::roundToInt (contentArea.getWidth() * 0.9f));
-    const auto maxArtworkHeight = juce::jmax (1, contentArea.getHeight() - (textLineHeight * 2) - textGap);
+    const auto maxArtworkHeight = juce::jmax (1, contentArea.getHeight() - (textLineHeight * 2) - textGap - actionAreaHeight);
     const auto artworkAspectRatio = nowPlayingTrack.artwork.isValid() && nowPlayingTrack.artwork.getHeight() > 0
                                         ? (float) nowPlayingTrack.artwork.getWidth() / (float) nowPlayingTrack.artwork.getHeight()
                                         : 1.0f;
@@ -589,9 +861,31 @@ juce::Rectangle<int> NowPlayingContent::getArtworkBounds() const
     return artworkArea.toNearestInt();
 }
 
+juce::Rectangle<int> NowPlayingContent::getSeekBackwardBounds() const
+{
+    auto contentArea = getLocalBounds().reduced (4, 4);
+    const auto artworkBounds = getArtworkBounds();
+    return juce::Rectangle<int> (artworkBounds.getX(),
+                                 contentArea.getBottom() - popupUiListBottomInset - popupUiActionHeight,
+                                 52,
+                                 popupUiActionHeight);
+}
+
+juce::Rectangle<int> NowPlayingContent::getSeekForwardBounds() const
+{
+    auto contentArea = getLocalBounds().reduced (4, 4);
+    const auto artworkBounds = getArtworkBounds();
+    return juce::Rectangle<int> (artworkBounds.getRight() - 52,
+                                 contentArea.getBottom() - popupUiListBottomInset - popupUiActionHeight,
+                                 52,
+                                 popupUiActionHeight);
+}
+
 void NowPlayingContent::mouseMove (const juce::MouseEvent& event)
 {
     setMouseCursor (getArtworkBounds().contains (event.getPosition())
+                        || getSeekBackwardBounds().contains (event.getPosition())
+                        || getSeekForwardBounds().contains (event.getPosition())
                         ? juce::MouseCursor::PointingHandCursor
                         : juce::MouseCursor::NormalCursor);
 }
@@ -603,16 +897,56 @@ void NowPlayingContent::mouseExit (const juce::MouseEvent&)
 
 void NowPlayingContent::mouseDown (const juce::MouseEvent& event)
 {
+    seekBackwardPressed = getSeekBackwardBounds().contains (event.getPosition());
+    seekForwardPressed = getSeekForwardBounds().contains (event.getPosition());
+
+    if (seekBackwardPressed || seekForwardPressed)
+    {
+        swipeCandidate = false;
+        repaint();
+        return;
+    }
+
     swipeCandidate = getArtworkBounds().contains (event.getPosition());
     swipeStartPosition = event.position;
 }
 
 void NowPlayingContent::mouseUp (const juce::MouseEvent& event)
 {
-    if (! swipeCandidate)
+    const auto triggerSeekBackward = seekBackwardPressed && getSeekBackwardBounds().contains (event.getPosition());
+    const auto triggerSeekForward = seekForwardPressed && getSeekForwardBounds().contains (event.getPosition());
+
+    seekBackwardPressed = false;
+    seekForwardPressed = false;
+
+    if (triggerSeekBackward)
+    {
+        repaint();
+
+        if (seekBackwardAction)
+            seekBackwardAction();
+
         return;
+    }
+
+    if (triggerSeekForward)
+    {
+        repaint();
+
+        if (seekForwardAction)
+            seekForwardAction();
+
+        return;
+    }
+
+    if (! swipeCandidate)
+    {
+        repaint();
+        return;
+    }
 
     swipeCandidate = false;
+    repaint();
 
     const auto deltaX = event.position.x - swipeStartPosition.x;
     const auto deltaY = event.position.y - swipeStartPosition.y;

@@ -16,7 +16,6 @@ public:
         std::function<void()> closeAudioBrowser;
         std::function<void()> closeNowPlayingWindow;
         std::function<void (const juce::String&)> setStatusText;
-        std::function<void (bool)> setChoosePluginEnabled;
         std::function<void (bool)> setOpenPluginGuiEnabled;
         std::function<void (const juce::String&)> setOpenPluginGuiText;
         std::function<void()> syncPlaybackUi;
@@ -46,7 +45,12 @@ public:
     AudioUnitPluginHost& operator= (AudioUnitPluginHost&&) = delete;
 
 private:
-    void ensurePluginWindowHost();
+    void setPluginStatus (const juce::String& text) const;
+    void setPluginGuiButtonText (const juce::String& text) const;
+    juce::Rectangle<int> getResolvedPluginWindowBounds() const;
+    void closeTransientSurfaces();
+    void armPluginWindowPaintCallback();
+    bool ensurePluginWindowHost();
     void showPluginWindow();
     void destroyPluginWindow();
     void showPluginTransitionCover();
@@ -57,7 +61,6 @@ private:
     std::function<void()> closeAudioBrowser;
     std::function<void()> closeNowPlayingWindow;
     std::function<void (const juce::String&)> setStatusText;
-    std::function<void (bool)> setChoosePluginEnabled;
     std::function<void (bool)> setOpenPluginGuiEnabled;
     std::function<void (const juce::String&)> setOpenPluginGuiText;
     std::function<void()> syncPlaybackUi;

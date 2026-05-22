@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -11,6 +12,14 @@ enum class PlaybackMode
     repeatOne,
     repeatFolder,
     shuffleFolder
+};
+
+enum class SeekTransitionStage
+{
+    idle,
+    fadingOut,
+    silentAfterSeek,
+    fadingIn
 };
 
 struct NowPlayingTrack final
@@ -29,6 +38,7 @@ struct PlaybackState final
 {
     juce::AudioFormatManager formatManager;
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
+    juce::TimeSliceThread readAheadThread { "PLE audio read ahead" };
     juce::AudioTransportSource transportSource;
     juce::CriticalSection audioSourceLock;
     juce::CriticalSection pluginStateLock;
@@ -49,7 +59,29 @@ struct PlaybackState final
     juce::String currentTrackAlbum;
     juce::Image currentTrackArtwork;
     double currentTrackDurationSeconds = 0.0;
+    std::shared_ptr<std::atomic<bool>> metadataLifetime { std::make_shared<std::atomic<bool>> (true) };
+    std::atomic<int64_t> metadataRequestId { 0 };
+    std::atomic<bool> metadataUpdatePending { false };
     PlaybackMode playbackMode = PlaybackMode::repeatFolder;
+    std::atomic<bool> seekRequestPending { false };
+    std::atomic<double> seekRequestPositionSeconds { 0.0 };
+    SeekTransitionStage seekTransitionStage = SeekTransitionStage::idle;
+    int seekFadeOutSamplesRemaining = 0;
+    int seekFadeOutSamplesTotal = 0;
+    int seekFadeInSamplesRemaining = 0;
+    int seekFadeInSamplesTotal = 0;
+    int seekSilenceSamplesRemaining = 0;
+    bool seekApplyPositionAfterBlock = false;
+    bool seekPluginResetPending = false;
+    std::atomic<bool> pauseMuteRequestPending { false };
+    std::atomic<bool> pauseUnmuteRequestPending { false };
+    bool pauseOutputMuted = false;
+    bool pauseFadeOutActive = false;
+    bool pauseFadeInActive = false;
+    int pauseFadeSamplesRemaining = 0;
+    int pauseFadeSamplesTotal = 0;
+    double pausedPositionSeconds = 0.0;
+    bool pausedPositionValid = false;
     bool playbackIsPlaying = false;
     bool playbackFinishedHandled = false;
     juce::File audioBrowserDirectory;
@@ -96,6 +128,7 @@ public:
 
     juce::String getCurrentAudioFileName() const;
     NowPlayingTrack getNowPlayingTrack() const;
+    bool consumeMetadataUpdatePending();
 
     std::shared_ptr<juce::AudioPluginInstance> getPluginInstance() const;
     bool hasPluginInstance() const;

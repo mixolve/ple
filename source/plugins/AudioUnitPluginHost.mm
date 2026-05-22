@@ -179,13 +179,12 @@ void AudioUnitPluginHost::initialise (Dependencies dependencies)
     closeAudioBrowser = std::move (dependencies.closeAudioBrowser);
     closeNowPlayingWindow = std::move (dependencies.closeNowPlayingWindow);
     setStatusText = std::move (dependencies.setStatusText);
-    setChoosePluginEnabled = std::move (dependencies.setChoosePluginEnabled);
     setOpenPluginGuiEnabled = std::move (dependencies.setOpenPluginGuiEnabled);
     setOpenPluginGuiText = std::move (dependencies.setOpenPluginGuiText);
     syncPlaybackUi = std::move (dependencies.syncPlaybackUi);
     getPluginWindowBounds = std::move (dependencies.getPluginWindowBounds);
 
-    pluginWindowAnchor.setInterceptsMouseClicks (false, false);
+    pluginWindowAnchor.setInterceptsMouseClicks (false, true);
 
     if (parentComponent != nullptr)
         parentComponent->addChildComponent (pluginWindowAnchor);
@@ -195,6 +194,50 @@ void AudioUnitPluginHost::reset()
 {
     closePluginMenu();
     destroyPluginWindow();
+}
+
+void AudioUnitPluginHost::setPluginStatus (const juce::String& text) const
+{
+    if (setStatusText)
+        setStatusText (text);
+}
+
+void AudioUnitPluginHost::setPluginGuiButtonText (const juce::String& text) const
+{
+    if (setOpenPluginGuiText)
+        setOpenPluginGuiText (text);
+}
+
+juce::Rectangle<int> AudioUnitPluginHost::getResolvedPluginWindowBounds() const
+{
+    if (getPluginWindowBounds != nullptr)
+        return getPluginWindowBounds();
+
+    return parentComponent != nullptr ? parentComponent->getLocalBounds()
+                                      : juce::Rectangle<int>();
+}
+
+void AudioUnitPluginHost::closeTransientSurfaces()
+{
+    if (closeAudioBrowser)
+        closeAudioBrowser();
+
+    if (closeNowPlayingWindow)
+        closeNowPlayingWindow();
+
+    closePluginMenu();
+}
+
+void AudioUnitPluginHost::armPluginWindowPaintCallback()
+{
+    if (auto* frame = dynamic_cast<PluginWindowFrame*> (pluginWindowHost.get()))
+    {
+        frame->setPaintCallback ([weakSelf = weak_from_this()]
+        {
+            if (auto self = weakSelf.lock())
+                self->hidePluginTransitionCover();
+        });
+    }
 }
 
 void AudioUnitPluginHost::refreshInstalledPluginDescriptions()
@@ -218,38 +261,26 @@ void AudioUnitPluginHost::choosePlugin()
     if (pluginMenuHost != nullptr)
     {
         closePluginMenu();
-
-        if (setStatusText)
-            setStatusText ("plugin selection closed");
-
+        setPluginStatus ("plugin selection closed");
         return;
     }
 
     destroyPluginWindow();
+    setPluginGuiButtonText ("PLUG");
 
-        if (setOpenPluginGuiText)
-            setOpenPluginGuiText ("PLUG");
-
-    if (setStatusText)
-        setStatusText ("scanning installed auv3 plugins");
+    setPluginStatus ("scanning installed auv3 plugins");
 
     refreshInstalledPluginDescriptions();
 
     if (installedPluginDescriptions.empty())
     {
-        if (setStatusText)
-            setStatusText ("no installed auv3 plugins");
-
+        setPluginStatus ("no installed auv3 plugins");
         return;
     }
 
-    if (setStatusText)
-        setStatusText ("found " + juce::String (installedPluginDescriptions.size()) + " installed auv3 plugin(s)");
+    setPluginStatus ("found " + juce::String (installedPluginDescriptions.size()) + " installed auv3 plugin(s)");
 
-    const auto pluginWindowBounds = getPluginWindowBounds != nullptr ? getPluginWindowBounds()
-                                                                     : parentComponent != nullptr ? parentComponent->getLocalBounds()
-                                                                                                 : juce::Rectangle<int>();
-
+    const auto pluginWindowBounds = getResolvedPluginWindowBounds();
     auto menuContent = std::make_unique<PluginMenuContent> (installedPluginDescriptions,
                                                             [this] (int selectedIndex)
                                                             {
@@ -274,15 +305,11 @@ void AudioUnitPluginHost::handlePluginMenuSelection (int selectedIndex)
 {
     if (selectedIndex < 0 || selectedIndex >= static_cast<int> (installedPluginDescriptions.size()))
     {
-        if (setStatusText)
-            setStatusText ("plugin selection cancelled");
-
+        setPluginStatus ("plugin selection cancelled");
         return;
     }
 
-    if (setStatusText)
-        setStatusText ("loading plugin");
-
+    setPluginStatus ("loading plugin");
     loadPluginDescription (installedPluginDescriptions[static_cast<size_t> (selectedIndex)]);
 }
 
@@ -330,13 +357,11 @@ void AudioUnitPluginHost::loadPluginDescription (const juce::PluginDescription& 
                                                                controller->setPluginInstance (std::move (sharedInstance));
 
                                                            self->destroyPluginWindow();
-                                                           self->ensurePluginWindowHost();
 
                                                            if (self->syncPlaybackUi)
                                                                self->syncPlaybackUi();
 
-                                                           if (self->setStatusText)
-                                                               self->setStatusText ("plugin loaded");
+                                                           self->setPluginStatus ("plugin loaded");
 
                                                            if (openGuiAfterLoad)
                                                            {
@@ -350,12 +375,12 @@ void AudioUnitPluginHost::loadPluginDescription (const juce::PluginDescription& 
                                                                });
                                                            }
                                                        }
-                                                       else if (self->setStatusText)
+                                                       else
                                                        {
                                                            if (errorMessage.isNotEmpty())
-                                                               self->setStatusText ("plugin load failed: " + errorMessage.toLowerCase());
+                                                               self->setPluginStatus ("plugin load failed: " + errorMessage.toLowerCase());
                                                            else
-                                                               self->setStatusText ("plugin load failed");
+                                                               self->setPluginStatus ("plugin load failed");
                                                        }
                                                    }
                                                });
@@ -380,56 +405,22 @@ void AudioUnitPluginHost::closePluginWindow()
 
 void AudioUnitPluginHost::openPluginGui()
 {
-    const auto closeTransientSurfaces = [this]
-    {
-        if (closeAudioBrowser)
-            closeAudioBrowser();
-
-        if (closeNowPlayingWindow)
-            closeNowPlayingWindow();
-
-        closePluginMenu();
-    };
-
-    const auto armPluginWindowPaintCallback = [this]
-    {
-        if (auto* frame = dynamic_cast<PluginWindowFrame*> (pluginWindowHost.get()))
-        {
-            frame->setPaintCallback ([weakSelf = weak_from_this()]
-            {
-                if (auto self = weakSelf.lock())
-                    self->hidePluginTransitionCover();
-            });
-        }
-    };
-
     if (pluginWindowHost != nullptr)
     {
         if (pluginWindowVisible)
         {
-            closeTransientSurfaces();
             closePluginWindow();
-
-            if (setOpenPluginGuiText)
-                setOpenPluginGuiText ("PLUG");
-
-            if (setStatusText)
-                setStatusText ("plugin gui closed");
-
+            setPluginGuiButtonText ("PLUG");
+            setPluginStatus ("plugin gui closed");
             return;
         }
 
         armPluginWindowPaintCallback();
+        closeTransientSurfaces();
         showPluginWindow();
         showPluginTransitionCover();
-        closeTransientSurfaces();
-
-        if (setOpenPluginGuiText)
-            setOpenPluginGuiText ("PLUG");
-
-        if (setStatusText)
-            setStatusText ("plugin gui opened");
-
+        setPluginGuiButtonText ("PLUG");
+        setPluginStatus ("plugin gui opened");
         return;
     }
 
@@ -438,57 +429,33 @@ void AudioUnitPluginHost::openPluginGui()
 
     if (! activePlugin)
     {
-        if (setStatusText)
-            setStatusText ("no plugin loaded");
-
+        setPluginStatus ("no plugin loaded");
         return;
     }
 
     if (! activePlugin->hasEditor())
     {
-        if (setStatusText)
-            setStatusText ("plugin has no gui");
-
+        setPluginStatus ("plugin has no gui");
         return;
     }
 
-    if (auto* editor = activePlugin->createEditorIfNeeded())
+    if (! ensurePluginWindowHost())
     {
-        pluginWindowHost = std::make_unique<PluginWindowFrame> (std::unique_ptr<juce::Component> (editor));
-
-        const auto pluginWindowBounds = getPluginWindowBounds != nullptr ? getPluginWindowBounds()
-                                                                         : parentComponent != nullptr ? parentComponent->getLocalBounds()
-                                                                                                     : juce::Rectangle<int>();
-        pluginWindowAnchor.setBounds (pluginWindowBounds);
-        pluginWindowHost->setBounds (pluginWindowAnchor.getLocalBounds());
-
-        pluginWindowAnchor.addChildComponent (*pluginWindowHost);
-        pluginWindowHost->setVisible (false);
-        pluginWindowAnchor.setVisible (false);
-
-        armPluginWindowPaintCallback();
-        showPluginWindow();
-        showPluginTransitionCover();
-        closeTransientSurfaces();
-
-        if (setOpenPluginGuiText)
-            setOpenPluginGuiText ("PLUG");
-
-        if (setStatusText)
-            setStatusText ("plugin gui opened");
+        setPluginStatus ("failed to open plugin gui");
+        return;
     }
-    else
-    {
-        if (setStatusText)
-            setStatusText ("failed to open plugin gui");
-    }
+
+    armPluginWindowPaintCallback();
+    closeTransientSurfaces();
+    showPluginWindow();
+    showPluginTransitionCover();
+    setPluginGuiButtonText ("PLUG");
+    setPluginStatus ("plugin gui opened");
 }
 
 void AudioUnitPluginHost::resized()
 {
-    const auto pluginWindowBounds = getPluginWindowBounds != nullptr ? getPluginWindowBounds()
-                                                                     : parentComponent != nullptr ? parentComponent->getLocalBounds()
-                                                                                                 : juce::Rectangle<int>();
+    const auto pluginWindowBounds = getResolvedPluginWindowBounds();
 
     pluginWindowAnchor.setBounds (pluginWindowBounds);
 
@@ -501,46 +468,43 @@ void AudioUnitPluginHost::resized()
     pluginWindowAnchor.setVisible (pluginWindowHost != nullptr && pluginWindowVisible);
 }
 
-void AudioUnitPluginHost::ensurePluginWindowHost()
+bool AudioUnitPluginHost::ensurePluginWindowHost()
 {
     if (pluginWindowHost != nullptr)
-        return;
+        return true;
 
     auto* playbackController = getPlaybackController != nullptr ? getPlaybackController() : nullptr;
 
     if (playbackController == nullptr)
-        return;
+        return false;
 
     auto activePlugin = playbackController->getPluginInstance();
 
     if (! activePlugin || ! activePlugin->hasEditor())
-        return;
+        return false;
 
     if (auto* editor = activePlugin->createEditorIfNeeded())
     {
         pluginWindowHost = std::make_unique<PluginWindowFrame> (std::unique_ptr<juce::Component> (editor));
         pluginWindowHost->setVisible (false);
 
-        const auto pluginWindowBounds = getPluginWindowBounds != nullptr ? getPluginWindowBounds()
-                                                                         : parentComponent != nullptr ? parentComponent->getLocalBounds()
-                                                                                                     : juce::Rectangle<int>();
+        const auto pluginWindowBounds = getResolvedPluginWindowBounds();
         pluginWindowAnchor.setBounds (pluginWindowBounds);
         pluginWindowHost->setBounds (pluginWindowAnchor.getLocalBounds());
 
         pluginWindowAnchor.addChildComponent (*pluginWindowHost);
+        return true;
     }
+
+    return false;
 }
 
 void AudioUnitPluginHost::showPluginWindow()
 {
-    ensurePluginWindowHost();
-
-    if (pluginWindowHost == nullptr)
+    if (! ensurePluginWindowHost())
         return;
 
-    const auto pluginWindowBounds = getPluginWindowBounds != nullptr ? getPluginWindowBounds()
-                                                                     : parentComponent != nullptr ? parentComponent->getLocalBounds()
-                                                                                                 : juce::Rectangle<int>();
+    const auto pluginWindowBounds = getResolvedPluginWindowBounds();
     pluginWindowAnchor.setBounds (pluginWindowBounds);
     pluginWindowAnchor.toFront (false);
     pluginWindowHost->setBounds (pluginWindowAnchor.getLocalBounds());
@@ -573,9 +537,7 @@ void AudioUnitPluginHost::showPluginTransitionCover()
         pluginWindowAnchor.addChildComponent (*pluginTransitionCover);
     }
 
-    const auto pluginWindowBounds = getPluginWindowBounds != nullptr ? getPluginWindowBounds()
-                                                                     : parentComponent != nullptr ? parentComponent->getLocalBounds()
-                                                                                                 : juce::Rectangle<int>();
+    const auto pluginWindowBounds = getResolvedPluginWindowBounds();
 
     pluginWindowAnchor.setBounds (pluginWindowBounds);
     pluginTransitionCover->setBounds (pluginWindowAnchor.getLocalBounds());

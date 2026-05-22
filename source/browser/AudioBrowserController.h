@@ -19,6 +19,8 @@ public:
         std::function<void()> closePluginWindow;
         std::function<void()> closeNowPlayingWindow;
         std::function<bool (const juce::File&)> loadAudioFile;
+        std::function<void (const juce::File&)> removeAudioFile;
+        std::function<void (const juce::File&, bool)> setBrowserFileMarked;
         std::function<void()> startPlayback;
         std::function<void()> syncPlaybackUi;
         std::function<void()> scheduleAudioBrowserDirectoryRefresh;
@@ -32,10 +34,13 @@ public:
 
     void browseAudioFiles();
     void refreshAudioBrowserDirectory();
+    void updateAudioBrowserRowsFromCache();
     void handleAudioBrowserSelection (int selectedIndex);
     void handleAudioBrowserFolderPlaySelection (int selectedIndex);
+    void handleAudioBrowserLongPress (int selectedIndex);
     void resized();
     void closeAudioBrowser();
+    void closeBrowserActionPopup();
 
     bool isAudioBrowserVisible() const;
 
@@ -61,6 +66,8 @@ private:
     std::function<void()> closePluginWindow;
     std::function<void()> closeNowPlayingWindow;
     std::function<bool (const juce::File&)> loadAudioFile;
+    std::function<void (const juce::File&)> removeAudioFile;
+    std::function<void (const juce::File&, bool)> setBrowserFileMarked;
     std::function<void()> startPlayback;
     std::function<void()> syncPlaybackUi;
     std::function<void()> scheduleAudioBrowserDirectoryRefresh;
@@ -68,4 +75,5 @@ private:
 
     std::vector<AudioBrowserEntry> audioBrowserEntries;
     std::unique_ptr<juce::Component> audioBrowserHost;
+    std::unique_ptr<juce::Component> browserActionHost;
 };

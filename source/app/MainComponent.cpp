@@ -81,6 +81,14 @@ MainComponent::MainComponent()
         {
             return loadAudioFile (file);
         },
+        [this] (const juce::File& file)
+        {
+            removeAudioFile (file);
+        },
+        [] (const juce::File& file, bool shouldBeMarked)
+        {
+            ple::setBrowserFileMarked (file, shouldBeMarked);
+        },
         [this]
         {
             startPlayback();
@@ -114,10 +122,6 @@ MainComponent::MainComponent()
         [this] (const juce::String& text)
         {
             setStatusText (text);
-        },
-        [this] (bool enabled)
-        {
-            setChoosePluginEnabled (enabled);
         },
         [this] (bool enabled)
         {
@@ -211,6 +215,9 @@ MainComponent::~MainComponent()
 
 void MainComponent::timerCallback()
 {
+    if (playbackController != nullptr && playbackController->consumeMetadataUpdatePending())
+        syncPlaybackUi();
+
 #if JUCE_IOS
     if (playbackController != nullptr && playbackController->hasCurrentTrackEnded())
         handlePlaybackFinished();
@@ -282,14 +289,6 @@ void MainComponent::setPlaybackModeText (const juce::String& text)
         mainView->setPlaybackModeText (text);
 }
 
-void MainComponent::setChoosePluginEnabled (bool enabled)
-{
-    if (mainView != nullptr)
-        mainView->setChoosePluginEnabled (enabled);
-
-    choosePluginButton.setEnabled (enabled);
-}
-
 void MainComponent::setOpenPluginGuiEnabled (bool enabled)
 {
     if (mainView != nullptr)
@@ -332,6 +331,30 @@ void MainComponent::refreshAudioBrowserDirectory()
 {
     if (audioBrowser != nullptr)
         audioBrowser->refreshAudioBrowserDirectory();
+}
+
+void MainComponent::removeAudioFile (const juce::File& file)
+{
+    const auto currentAudioFileName = playbackController != nullptr ? playbackController->getCurrentAudioFileName() : juce::String();
+
+    if (playbackController != nullptr && currentAudioFileName.isNotEmpty() && juce::File (currentAudioFileName) == file)
+    {
+        playbackController->pausePlayback();
+        playbackController->clearNavigationHistory();
+    }
+
+    file.deleteFile();
+
+    if (playbackController != nullptr)
+    {
+        playbackController->refreshAudioLibrary();
+        playbackController->refreshPlaybackQueue();
+    }
+
+    if (audioBrowser != nullptr && audioBrowser->isAudioBrowserVisible())
+        scheduleAudioBrowserDirectoryRefresh();
+
+    syncPlaybackUi();
 }
 
 void MainComponent::scheduleAudioBrowserDirectoryRefresh()
@@ -437,7 +460,9 @@ void MainComponent::openNowPlayingWindow()
 
     auto nowPlayingContentToOwn = std::make_unique<NowPlayingContent> (
         [this] { playPreviousTrack(); },
-        [this] { playNextTrack(); });
+        [this] { playNextTrack(); },
+        [this] { seekPlaybackBy (-15.0); },
+        [this] { seekPlaybackBy (15.0); });
     nowPlayingContent = nowPlayingContentToOwn.get();
     nowPlayingContent->setTrack (playbackController->getNowPlayingTrack());
 
@@ -496,7 +521,7 @@ void MainComponent::playPreviousTrack()
     playbackController->playPreviousTrack();
 
     if (audioBrowser != nullptr && audioBrowser->isAudioBrowserVisible())
-        scheduleAudioBrowserDirectoryRefresh();
+        audioBrowser->updateAudioBrowserRowsFromCache();
 
     syncPlaybackUi();
 }
@@ -509,7 +534,7 @@ void MainComponent::playNextTrack()
     playbackController->playNextTrack();
 
     if (audioBrowser != nullptr && audioBrowser->isAudioBrowserVisible())
-        scheduleAudioBrowserDirectoryRefresh();
+        audioBrowser->updateAudioBrowserRowsFromCache();
 
     syncPlaybackUi();
 }
@@ -579,7 +604,14 @@ void MainComponent::seekPlayback (double positionSeconds)
         return;
 
     playbackController->seekTo (positionSeconds);
-    syncPlaybackUi();
+}
+
+void MainComponent::seekPlaybackBy (double deltaSeconds)
+{
+    if (playbackController == nullptr)
+        return;
+
+    seekPlayback (playbackController->getCurrentPosition() + deltaSeconds);
 }
 
 void MainComponent::togglePlayback()
@@ -607,7 +639,7 @@ void MainComponent::handlePlaybackFinished()
     playbackController->handlePlaybackFinished();
 
     if (audioBrowser != nullptr && audioBrowser->isAudioBrowserVisible())
-        scheduleAudioBrowserDirectoryRefresh();
+        audioBrowser->updateAudioBrowserRowsFromCache();
 
     syncPlaybackUi();
 }

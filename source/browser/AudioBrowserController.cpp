@@ -6,6 +6,19 @@
 #include <algorithm>
 #include <utility>
 
+namespace
+{
+bool isRootReadmeFile (const juce::File& file)
+{
+    return file.getFileName().equalsIgnoreCase ("readme.md");
+}
+
+juce::String getActionStatusText (const juce::String& prefix, const juce::File& file)
+{
+    return prefix + " " + file.getFileName().toLowerCase();
+}
+}
+
 void AudioBrowserController::initialise (Dependencies dependencies)
 {
     parentComponent = &dependencies.parentComponent;
@@ -16,6 +29,8 @@ void AudioBrowserController::initialise (Dependencies dependencies)
     closePluginWindow = std::move (dependencies.closePluginWindow);
     closeNowPlayingWindow = std::move (dependencies.closeNowPlayingWindow);
     loadAudioFile = std::move (dependencies.loadAudioFile);
+    removeAudioFile = std::move (dependencies.removeAudioFile);
+    setBrowserFileMarked = std::move (dependencies.setBrowserFileMarked);
     startPlayback = std::move (dependencies.startPlayback);
     syncPlaybackUi = std::move (dependencies.syncPlaybackUi);
     scheduleAudioBrowserDirectoryRefresh = std::move (dependencies.scheduleAudioBrowserDirectoryRefresh);
@@ -25,15 +40,26 @@ void AudioBrowserController::initialise (Dependencies dependencies)
 void AudioBrowserController::reset()
 {
     closeAudioBrowser();
+    closeBrowserActionPopup();
     audioBrowserEntries.clear();
 }
 
 void AudioBrowserController::closeAudioBrowser()
 {
+    closeBrowserActionPopup();
+
     if (audioBrowserHost != nullptr)
         audioBrowserHost->setVisible (false);
 
     audioBrowserHost.reset();
+}
+
+void AudioBrowserController::closeBrowserActionPopup()
+{
+    if (browserActionHost != nullptr)
+        browserActionHost->setVisible (false);
+
+    browserActionHost.reset();
 }
 
 bool AudioBrowserController::isAudioBrowserVisible() const
@@ -55,6 +81,7 @@ void AudioBrowserController::browseAudioFiles()
     if (audioBrowserHost != nullptr)
     {
         closeAudioBrowser();
+        closeBrowserActionPopup();
 
         if (setStatusText)
             setStatusText ("file browser closed");
@@ -67,6 +94,7 @@ void AudioBrowserController::browseAudioFiles()
 
 void AudioBrowserController::refreshAudioBrowserDirectory()
 {
+    closeBrowserActionPopup();
     audioBrowserEntries.clear();
 
     auto* playbackController = getPlaybackController != nullptr ? getPlaybackController() : nullptr;
@@ -131,7 +159,11 @@ void AudioBrowserController::refreshAudioBrowserDirectory()
                                   && currentAudioFileName.isNotEmpty()
                                   && juce::File (currentAudioFileName).isAChildOf (entry.file);
 
-        browserRows.push_back ({ entry.label, isSelected, isPathActive, entry.isDirectory && ! entry.isParent });
+        browserRows.push_back ({ entry.label,
+                                 isSelected,
+                                 isPathActive,
+                                 entry.isDirectory && ! entry.isParent,
+                                 ple::isBrowserFileMarked (entry.file) });
     }
 
     auto createBrowserHost = [this, browserBounds] (std::vector<FileBrowserContent::Row> rows)
@@ -144,6 +176,10 @@ void AudioBrowserController::refreshAudioBrowserDirectory()
                                                                     [this] (int index)
                                                                     {
                                                                         handleAudioBrowserFolderPlaySelection (index);
+                                                                    },
+                                                                    [this] (int index)
+                                                                    {
+                                                                        handleAudioBrowserLongPress (index);
                                                                     });
 
         browserContent->setSize (browserBounds.getWidth() - 2, browserBounds.getHeight() - 2);
@@ -179,7 +215,131 @@ void AudioBrowserController::refreshAudioBrowserDirectory()
 
     if (setStatusText)
         setStatusText (audioBrowserDirectory == audioRootDirectory ? "browsing documents"
-                                                                  : "browsing " + audioBrowserDirectory.getFileName());
+                                                                   : "browsing " + audioBrowserDirectory.getFileName());
+}
+
+void AudioBrowserController::updateAudioBrowserRowsFromCache()
+{
+    auto* playbackController = getPlaybackController != nullptr ? getPlaybackController() : nullptr;
+
+    if (playbackController == nullptr || audioBrowserHost == nullptr)
+        return;
+
+    auto* browserFrame = dynamic_cast<PluginWindowFrame*> (audioBrowserHost.get());
+
+    if (browserFrame == nullptr)
+        return;
+
+    auto* browserContentView = dynamic_cast<FileBrowserContent*> (browserFrame->getContentComponent());
+
+    if (browserContentView == nullptr)
+        return;
+
+    std::vector<FileBrowserContent::Row> browserRows;
+    browserRows.reserve (audioBrowserEntries.size());
+
+    const auto currentAudioFileName = playbackController->getCurrentAudioFileName();
+
+    for (size_t index = 0; index < audioBrowserEntries.size(); ++index)
+    {
+        const auto& entry = audioBrowserEntries[index];
+        const auto isSelected = currentAudioFileName.isNotEmpty()
+                                && entry.file.getFullPathName().equalsIgnoreCase (currentAudioFileName);
+        const auto isPathActive = entry.isDirectory
+                                  && ! entry.isParent
+                                  && currentAudioFileName.isNotEmpty()
+                                  && juce::File (currentAudioFileName).isAChildOf (entry.file);
+
+        browserRows.push_back ({ entry.label,
+                                 isSelected,
+                                 isPathActive,
+                                 entry.isDirectory && ! entry.isParent,
+                                 ple::isBrowserFileMarked (entry.file) });
+    }
+
+    browserContentView->setRows (std::move (browserRows));
+}
+
+void AudioBrowserController::handleAudioBrowserLongPress (int selectedIndex)
+{
+    if (selectedIndex < 0 || selectedIndex >= static_cast<int> (audioBrowserEntries.size()))
+        return;
+
+    const auto entry = audioBrowserEntries[static_cast<size_t> (selectedIndex)];
+
+    if (entry.isParent || entry.isDirectory)
+        return;
+
+    const auto currentMarkState = ple::isBrowserFileMarked (entry.file);
+    const auto canRemove = ! isRootReadmeFile (entry.file);
+    const auto browserBounds = getAudioBrowserWindowBounds != nullptr ? getAudioBrowserWindowBounds()
+                                                                      : parentComponent != nullptr ? parentComponent->getLocalBounds()
+                                                                                                  : juce::Rectangle<int>();
+
+    closeBrowserActionPopup();
+
+    auto actionContent = std::make_unique<BrowserActionContent> (
+        entry.label,
+        currentMarkState,
+        canRemove,
+        [this, entry]
+        {
+            if (removeAudioFile == nullptr)
+                return;
+
+            auto* playbackController = getPlaybackController != nullptr ? getPlaybackController() : nullptr;
+            const auto currentAudioFileName = playbackController != nullptr ? playbackController->getCurrentAudioFileName() : juce::String();
+
+            if (playbackController != nullptr && currentAudioFileName.isNotEmpty() && juce::File (currentAudioFileName) == entry.file)
+            {
+                playbackController->pausePlayback();
+                playbackController->clearNavigationHistory();
+            }
+
+            removeAudioFile (entry.file);
+
+            if (playbackController != nullptr)
+            {
+                playbackController->refreshAudioLibrary();
+                playbackController->refreshPlaybackQueue();
+            }
+
+            if (setStatusText)
+                setStatusText (getActionStatusText ("removed", entry.file));
+
+            if (isAudioBrowserVisible() && scheduleAudioBrowserDirectoryRefresh)
+                scheduleAudioBrowserDirectoryRefresh();
+
+            closeBrowserActionPopup();
+        },
+        [this, entry, currentMarkState]
+        {
+            if (setBrowserFileMarked != nullptr)
+                setBrowserFileMarked (entry.file, ! currentMarkState);
+
+            if (setStatusText)
+                setStatusText (getActionStatusText (currentMarkState ? "unmarked" : "marked", entry.file));
+
+            if (isAudioBrowserVisible())
+                updateAudioBrowserRowsFromCache();
+
+            closeBrowserActionPopup();
+        },
+        [this]
+        {
+            closeBrowserActionPopup();
+        });
+
+    actionContent->setSize (browserBounds.getWidth() - 2, browserBounds.getHeight() - 2);
+
+    browserActionHost = std::make_unique<PluginWindowFrame> (std::move (actionContent));
+    browserActionHost->setBounds (browserBounds);
+
+    if (parentComponent != nullptr)
+        parentComponent->addChildComponent (*browserActionHost);
+
+    browserActionHost->setVisible (true);
+    browserActionHost->toFront (true);
 }
 
 void AudioBrowserController::handleAudioBrowserSelection (int selectedIndex)
@@ -213,8 +373,8 @@ void AudioBrowserController::handleAudioBrowserSelection (int selectedIndex)
     if (startPlayback)
         startPlayback();
 
-    if (isAudioBrowserVisible() && scheduleAudioBrowserDirectoryRefresh)
-        scheduleAudioBrowserDirectoryRefresh();
+    if (isAudioBrowserVisible())
+        updateAudioBrowserRowsFromCache();
 }
 
 void AudioBrowserController::handleAudioBrowserFolderPlaySelection (int selectedIndex)
@@ -251,17 +411,26 @@ void AudioBrowserController::handleAudioBrowserFolderPlaySelection (int selected
     if (startPlayback)
         startPlayback();
 
-    if (isAudioBrowserVisible() && scheduleAudioBrowserDirectoryRefresh)
-        scheduleAudioBrowserDirectoryRefresh();
+    if (isAudioBrowserVisible())
+        updateAudioBrowserRowsFromCache();
 }
 
 void AudioBrowserController::resized()
 {
-    if (audioBrowserHost == nullptr)
-        return;
-
     const auto browserBounds = getAudioBrowserWindowBounds != nullptr ? getAudioBrowserWindowBounds()
-                                                                       : parentComponent != nullptr ? parentComponent->getLocalBounds()
-                                                                                                   : juce::Rectangle<int>();
+                                                                      : parentComponent != nullptr ? parentComponent->getLocalBounds()
+                                                                                                  : juce::Rectangle<int>();
+
+    if (audioBrowserHost == nullptr)
+    {
+        if (browserActionHost != nullptr)
+            browserActionHost->setBounds (browserBounds);
+
+        return;
+    }
+
     audioBrowserHost->setBounds (browserBounds);
+
+    if (browserActionHost != nullptr)
+        browserActionHost->setBounds (browserBounds);
 }

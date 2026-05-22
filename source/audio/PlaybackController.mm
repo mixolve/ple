@@ -6,11 +6,289 @@
 #include "audio/AudioFiles.h"
 
 #include <initializer_list>
+#include <thread>
 
 namespace ple
 {
 namespace
 {
+constexpr double seekFadeOutSeconds = 0.010;
+constexpr double seekDecodePreRollSeconds = 0.120;
+constexpr double seekSilenceSeconds = 0.0;
+constexpr double seekFadeInSeconds = 0.030;
+constexpr double pauseGateFadeSeconds = 0.006;
+constexpr int audioReadAheadBufferSamples = 32768;
+
+static int getSampleCountForSeconds (const PlaybackState& state, double seconds, int minSamples, int maxSamples)
+{
+    const auto sampleRate = state.currentSampleRate > 0.0 ? state.currentSampleRate : 44100.0;
+    return juce::jlimit (minSamples, maxSamples, juce::roundToInt (sampleRate * seconds));
+}
+
+static void clearSeekTransitionState (PlaybackState& state)
+{
+    state.seekRequestPending.store (false);
+    state.seekTransitionStage = SeekTransitionStage::idle;
+    state.seekFadeOutSamplesRemaining = 0;
+    state.seekFadeOutSamplesTotal = 0;
+    state.seekFadeInSamplesRemaining = 0;
+    state.seekFadeInSamplesTotal = 0;
+    state.seekSilenceSamplesRemaining = 0;
+    state.seekApplyPositionAfterBlock = false;
+    state.seekPluginResetPending = false;
+}
+
+static void beginPendingSeekIfNeeded (PlaybackState& state)
+{
+    if (! state.seekRequestPending.exchange (false))
+        return;
+
+    state.seekTransitionStage = SeekTransitionStage::fadingOut;
+    state.seekFadeOutSamplesTotal = getSampleCountForSeconds (state, seekFadeOutSeconds, 64, 1024);
+    state.seekFadeOutSamplesRemaining = state.seekFadeOutSamplesTotal;
+    state.seekFadeInSamplesTotal = getSampleCountForSeconds (state, seekFadeInSeconds, 128, 4096);
+    state.seekFadeInSamplesRemaining = state.seekFadeInSamplesTotal;
+    state.seekSilenceSamplesRemaining = getSampleCountForSeconds (state, seekSilenceSeconds, 0, 512);
+    state.seekApplyPositionAfterBlock = false;
+}
+
+static void applyGainToRange (juce::AudioBuffer<float>& buffer,
+                              int startSample,
+                              int numSamples,
+                              float gain)
+{
+    if (numSamples <= 0)
+        return;
+
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+        buffer.applyGain (channel, startSample, numSamples, gain);
+}
+
+static void applySeekTransition (PlaybackState& state,
+                                 juce::AudioBuffer<float>& buffer,
+                                 int startSample,
+                                 int numSamples)
+{
+    if (numSamples <= 0 || state.seekTransitionStage == SeekTransitionStage::idle)
+        return;
+
+    auto offset = 0;
+
+    while (offset < numSamples)
+    {
+        switch (state.seekTransitionStage)
+        {
+            case SeekTransitionStage::idle:
+                return;
+
+            case SeekTransitionStage::fadingOut:
+            {
+                const auto samplesThisStep = juce::jmin (numSamples - offset, state.seekFadeOutSamplesRemaining);
+                const auto totalSamples = juce::jmax (1, state.seekFadeOutSamplesTotal);
+
+                for (int sample = 0; sample < samplesThisStep; ++sample)
+                {
+                    const auto gain = (float) (state.seekFadeOutSamplesRemaining - sample) / (float) totalSamples;
+                    applyGainToRange (buffer, startSample + offset + sample, 1, gain);
+                }
+
+                state.seekFadeOutSamplesRemaining -= samplesThisStep;
+                offset += samplesThisStep;
+
+                if (state.seekFadeOutSamplesRemaining <= 0)
+                {
+                    state.seekApplyPositionAfterBlock = true;
+
+                    if (offset < numSamples)
+                        buffer.clear (startSample + offset, numSamples - offset);
+
+                    return;
+                }
+
+                break;
+            }
+
+            case SeekTransitionStage::silentAfterSeek:
+            {
+                const auto samplesThisStep = juce::jmin (numSamples - offset, state.seekSilenceSamplesRemaining);
+                buffer.clear (startSample + offset, samplesThisStep);
+                state.seekSilenceSamplesRemaining -= samplesThisStep;
+                offset += samplesThisStep;
+
+                if (state.seekSilenceSamplesRemaining <= 0)
+                    state.seekTransitionStage = SeekTransitionStage::fadingIn;
+
+                break;
+            }
+
+            case SeekTransitionStage::fadingIn:
+            {
+                const auto samplesThisStep = juce::jmin (numSamples - offset, state.seekFadeInSamplesRemaining);
+                const auto totalSamples = juce::jmax (1, state.seekFadeInSamplesTotal);
+                const auto samplesAlreadyFaded = state.seekFadeInSamplesTotal - state.seekFadeInSamplesRemaining;
+
+                for (int sample = 0; sample < samplesThisStep; ++sample)
+                {
+                    const auto gain = (float) (samplesAlreadyFaded + sample) / (float) totalSamples;
+                    applyGainToRange (buffer, startSample + offset + sample, 1, gain);
+                }
+
+                state.seekFadeInSamplesRemaining -= samplesThisStep;
+                offset += samplesThisStep;
+
+                if (state.seekFadeInSamplesRemaining <= 0)
+                {
+                    state.seekTransitionStage = SeekTransitionStage::idle;
+                    state.seekFadeInSamplesRemaining = 0;
+                    state.seekFadeInSamplesTotal = 0;
+                    return;
+                }
+
+                break;
+            }
+        }
+    }
+}
+
+static void applySeekPositionAfterFadeOutIfNeeded (PlaybackState& state)
+{
+    if (! state.seekApplyPositionAfterBlock)
+        return;
+
+    const auto targetPosition = state.seekRequestPositionSeconds.load();
+    const auto preRollStartPosition = juce::jmax (0.0, targetPosition - seekDecodePreRollSeconds);
+    const auto preRollSeconds = juce::jmax (0.0, targetPosition - preRollStartPosition);
+    const auto preRollSamples = getSampleCountForSeconds (state, preRollSeconds, 0, 8192);
+
+    state.transportSource.setPosition (preRollStartPosition);
+    state.playbackFinishedHandled = false;
+    state.seekApplyPositionAfterBlock = false;
+    state.seekPluginResetPending = true;
+    state.seekSilenceSamplesRemaining += preRollSamples;
+    state.seekTransitionStage = state.seekSilenceSamplesRemaining > 0 ? SeekTransitionStage::silentAfterSeek
+                                                                      : SeekTransitionStage::fadingIn;
+}
+
+static void resetPluginAfterSeekIfNeeded (PlaybackState& state, juce::AudioPluginInstance& plugin)
+{
+    if (! state.seekPluginResetPending)
+        return;
+
+    plugin.reset();
+    state.pluginScratchBuffer.clear();
+    state.seekPluginResetPending = false;
+}
+
+static void clearPauseGateState (PlaybackState& state)
+{
+    state.pauseOutputMuted = false;
+    state.pauseFadeOutActive = false;
+    state.pauseFadeInActive = false;
+    state.pauseFadeSamplesRemaining = 0;
+    state.pauseFadeSamplesTotal = 0;
+}
+
+static void startPauseFadeOut (PlaybackState& state)
+{
+    state.pauseOutputMuted = false;
+    state.pauseFadeInActive = false;
+    state.pauseFadeOutActive = true;
+    state.pauseFadeSamplesTotal = getSampleCountForSeconds (state, pauseGateFadeSeconds, 32, 512);
+    state.pauseFadeSamplesRemaining = state.pauseFadeSamplesTotal;
+}
+
+static void startPauseFadeIn (PlaybackState& state)
+{
+    state.pauseOutputMuted = false;
+    state.pauseFadeOutActive = false;
+    state.pauseFadeInActive = true;
+    state.pauseFadeSamplesTotal = getSampleCountForSeconds (state, pauseGateFadeSeconds, 32, 512);
+    state.pauseFadeSamplesRemaining = state.pauseFadeSamplesTotal;
+}
+
+static void beginPendingPauseGateIfNeeded (PlaybackState& state)
+{
+    if (state.pauseUnmuteRequestPending.exchange (false))
+    {
+        state.pauseMuteRequestPending.store (false);
+
+        if (state.pauseOutputMuted || state.pauseFadeOutActive)
+            startPauseFadeIn (state);
+        else
+            clearPauseGateState (state);
+    }
+
+    if (state.pauseMuteRequestPending.exchange (false))
+    {
+        state.pauseUnmuteRequestPending.store (false);
+
+        if (! state.pauseOutputMuted)
+            startPauseFadeOut (state);
+    }
+}
+
+static void applyPauseGateIfNeeded (PlaybackState& state,
+                                    juce::AudioBuffer<float>& buffer,
+                                    int startSample,
+                                    int numSamples)
+{
+    if (numSamples <= 0)
+        return;
+
+    beginPendingPauseGateIfNeeded (state);
+
+    if (state.pauseFadeOutActive)
+    {
+        const auto samplesThisStep = juce::jmin (numSamples, state.pauseFadeSamplesRemaining);
+        const auto totalSamples = juce::jmax (1, state.pauseFadeSamplesTotal);
+
+        for (int sample = 0; sample < samplesThisStep; ++sample)
+        {
+            const auto gain = (float) (state.pauseFadeSamplesRemaining - sample) / (float) totalSamples;
+            applyGainToRange (buffer, startSample + sample, 1, gain);
+        }
+
+        state.pauseFadeSamplesRemaining -= samplesThisStep;
+
+        if (state.pauseFadeSamplesRemaining <= 0)
+        {
+            if (samplesThisStep < numSamples)
+                buffer.clear (startSample + samplesThisStep, numSamples - samplesThisStep);
+
+            state.pauseFadeOutActive = false;
+            state.pauseOutputMuted = true;
+            state.pauseFadeSamplesRemaining = 0;
+            state.pauseFadeSamplesTotal = 0;
+        }
+
+        return;
+    }
+
+    if (state.pauseOutputMuted)
+    {
+        buffer.clear (startSample, numSamples);
+        return;
+    }
+
+    if (state.pauseFadeInActive)
+    {
+        const auto samplesThisStep = juce::jmin (numSamples, state.pauseFadeSamplesRemaining);
+        const auto totalSamples = juce::jmax (1, state.pauseFadeSamplesTotal);
+        const auto samplesAlreadyFaded = state.pauseFadeSamplesTotal - state.pauseFadeSamplesRemaining;
+
+        for (int sample = 0; sample < samplesThisStep; ++sample)
+        {
+            const auto gain = (float) (samplesAlreadyFaded + sample) / (float) totalSamples;
+            applyGainToRange (buffer, startSample + sample, 1, gain);
+        }
+
+        state.pauseFadeSamplesRemaining -= samplesThisStep;
+
+        if (state.pauseFadeSamplesRemaining <= 0)
+            clearPauseGateState (state);
+    }
+}
+
 static juce::File getFallbackNoiseFile()
 {
     return juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ple-white-noise.wav");
@@ -161,18 +439,88 @@ static void mergeNativeMetadata (const juce::File&,
 {
 }
 #endif
+
+static void loadNativeMetadataAsync (PlaybackState& state,
+                                     const juce::File& file,
+                                     juce::String title,
+                                     juce::String artist,
+                                     juce::String album)
+{
+    const auto requestId = state.metadataRequestId.fetch_add (1) + 1;
+    const auto lifetime = state.metadataLifetime;
+    const auto filePath = file.getFullPathName();
+    auto initialTitle = std::move (title);
+    auto initialArtist = std::move (artist);
+    auto initialAlbum = std::move (album);
+
+    std::thread ([&state, lifetime, requestId, file, filePath, initialTitle, initialArtist, initialAlbum] () mutable
+    {
+        juce::Image nativeArtwork;
+        mergeNativeMetadata (file, initialTitle, initialArtist, initialAlbum, nativeArtwork);
+
+        if (lifetime == nullptr || ! lifetime->load())
+            return;
+
+        auto resolvedTitle = std::move (initialTitle);
+        auto resolvedArtist = std::move (initialArtist);
+        auto resolvedAlbum = std::move (initialAlbum);
+
+        juce::MessageManager::callAsync ([&state,
+                                          lifetime,
+                                          requestId,
+                                          filePath,
+                                          asyncTitle = std::move (resolvedTitle),
+                                          asyncArtist = std::move (resolvedArtist),
+                                          asyncAlbum = std::move (resolvedAlbum),
+                                          resolvedArtwork = std::move (nativeArtwork)] () mutable
+        {
+            if (lifetime == nullptr || ! lifetime->load())
+                return;
+
+            if (state.metadataRequestId.load() != requestId
+                || ! state.currentAudioFileName.equalsIgnoreCase (filePath))
+            {
+                return;
+            }
+
+            if (asyncTitle.isNotEmpty())
+                state.currentTrackTitle = asyncTitle;
+
+            state.currentTrackArtist = asyncArtist;
+            state.currentTrackAlbum = asyncAlbum;
+
+            if (resolvedArtwork.isValid())
+                state.currentTrackArtwork = resolvedArtwork;
+
+            state.statusText = (state.playbackIsPlaying ? "playing " : "loaded ") + state.currentTrackTitle.toLowerCase();
+            state.metadataUpdatePending.store (true);
+        });
+    }).detach();
+}
 }
 
 PlaybackController::PlaybackController (PlaybackState& stateToUse)
     : state (stateToUse)
 {
     state.formatManager.registerBasicFormats();
+    state.readAheadThread.startThread();
 }
 
 PlaybackController::~PlaybackController()
 {
+    if (state.metadataLifetime != nullptr)
+        state.metadataLifetime->store (false);
+
     releaseResources();
     clearPluginInstance();
+
+    {
+        const juce::ScopedLock lock (state.audioSourceLock);
+        state.transportSource.setSource (nullptr);
+        state.readerSource.reset();
+    }
+
+    state.readAheadThread.stopThread (1000);
 }
 
 void PlaybackController::prepareToPlay (int samplesPerBlockExpected, double sampleRate)
@@ -204,10 +552,13 @@ void PlaybackController::prepareToPlay (int samplesPerBlockExpected, double samp
 void PlaybackController::getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill)
 {
     juce::ScopedTryLock tryLock (state.audioSourceLock);
+    auto renderedPlaybackBlock = false;
 
     if (tryLock.isLocked() && state.readerSource)
     {
+        beginPendingSeekIfNeeded (state);
         state.transportSource.getNextAudioBlock (bufferToFill);
+        renderedPlaybackBlock = bufferToFill.buffer != nullptr && bufferToFill.numSamples > 0;
     }
     else
     {
@@ -230,6 +581,13 @@ void PlaybackController::getNextAudioBlock (const juce::AudioSourceChannelInfo& 
             if (state.pluginScratchBuffer.getNumChannels() < requiredChannels
                 || state.pluginScratchBuffer.getNumSamples() < bufferToFill.numSamples)
             {
+                if (renderedPlaybackBlock)
+                {
+                    applySeekTransition (state, *bufferToFill.buffer, bufferToFill.startSample, bufferToFill.numSamples);
+                    applySeekPositionAfterFadeOutIfNeeded (state);
+                    applyPauseGateIfNeeded (state, *bufferToFill.buffer, bufferToFill.startSample, bufferToFill.numSamples);
+                }
+
                 return;
             }
 
@@ -248,12 +606,21 @@ void PlaybackController::getNextAudioBlock (const juce::AudioSourceChannelInfo& 
                                                bufferToFill.numSamples);
 
             juce::MidiBuffer midiBuffer;
+            resetPluginAfterSeekIfNeeded (state, *activePlugin);
             activePlugin->processBlock (pluginBufferView, midiBuffer);
 
             for (int channel = 0; channel < outputChannels; ++channel)
                 bufferToFill.buffer->copyFrom (channel, bufferToFill.startSample, state.pluginScratchBuffer, channel, 0, bufferToFill.numSamples);
         }
     }
+
+    if (renderedPlaybackBlock)
+    {
+        applySeekTransition (state, *bufferToFill.buffer, bufferToFill.startSample, bufferToFill.numSamples);
+        applySeekPositionAfterFadeOutIfNeeded (state);
+        applyPauseGateIfNeeded (state, *bufferToFill.buffer, bufferToFill.startSample, bufferToFill.numSamples);
+    }
+
 }
 
 void PlaybackController::releaseResources()
@@ -432,9 +799,6 @@ int PlaybackController::getSequentialTrackIndexForNavigation (bool movingForward
 
 bool PlaybackController::loadAudioFile (const juce::File& file)
 {
-    const auto loadStartMs = juce::Time::getMillisecondCounterHiRes();
-    juce::Logger::writeToLog ("loadAudioFile start: " + file.getFileName());
-
     int matchingIndex = -1;
 
     for (size_t index = 0; index < state.availableAudioFiles.size(); ++index)
@@ -451,10 +815,6 @@ bool PlaybackController::loadAudioFile (const juce::File& file)
 
     std::unique_ptr<juce::AudioFormatReader> reader (state.formatManager.createReaderFor (file));
 
-    juce::Logger::writeToLog ("loadAudioFile reader opened in "
-                              + juce::String (juce::Time::getMillisecondCounterHiRes() - loadStartMs, 2)
-                              + " ms: " + file.getFileName());
-
     if (reader == nullptr)
     {
         state.currentTrackDurationSeconds = 0.0;
@@ -468,8 +828,6 @@ bool PlaybackController::loadAudioFile (const juce::File& file)
     auto metadataTitle = getMetadataValue (reader->metadataValues, { "TITLE", "Title", "title", "TIT2" });
     auto metadataArtist = getMetadataValue (reader->metadataValues, { "ARTIST", "Artist", "artist", "ALBUMARTIST", "Album Artist", "album artist", "TPE1", "TPE2" });
     auto metadataAlbum = getMetadataValue (reader->metadataValues, { "ALBUM", "Album", "album", "TALB" });
-    juce::Image metadataArtwork;
-    mergeNativeMetadata (file, metadataTitle, metadataArtist, metadataAlbum, metadataArtwork);
 
     const auto sampleRate = reader->sampleRate;
     state.currentTrackDurationSeconds = sampleRate > 0.0 ? static_cast<double> (reader->lengthInSamples) / sampleRate : 0.0;
@@ -480,34 +838,42 @@ bool PlaybackController::loadAudioFile (const juce::File& file)
         const juce::ScopedLock lock (state.audioSourceLock);
 
         state.readerSource = std::move (nextReaderSource);
-        state.transportSource.setSource (state.readerSource.get(), 0, nullptr, sampleRate);
+        clearSeekTransitionState (state);
+        state.transportSource.setSource (state.readerSource.get(), audioReadAheadBufferSamples, &state.readAheadThread, sampleRate);
         state.transportSource.setPosition (0.0);
         previousReaderSource.reset();
     }
-
-    juce::Logger::writeToLog ("loadAudioFile source swapped in "
-                              + juce::String (juce::Time::getMillisecondCounterHiRes() - loadStartMs, 2)
-                              + " ms: " + file.getFileName());
 
     state.currentAudioFileName = file.getFullPathName();
     state.currentTrackTitle = metadataTitle.isNotEmpty() ? metadataTitle
                              : file.getFileNameWithoutExtension();
     state.currentTrackArtist = metadataArtist;
     state.currentTrackAlbum = metadataAlbum;
-    state.currentTrackArtwork = metadataArtwork;
+    state.currentTrackArtwork = {};
 
     state.playbackFinishedHandled = false;
+    state.pausedPositionSeconds = 0.0;
+    state.pausedPositionValid = ! state.playbackIsPlaying;
     state.statusText = "loaded " + state.currentTrackTitle.toLowerCase();
-
-    juce::Logger::writeToLog ("loadAudioFile finished in "
-                              + juce::String (juce::Time::getMillisecondCounterHiRes() - loadStartMs, 2)
-                              + " ms: " + file.getFileName());
+    loadNativeMetadataAsync (state, file, metadataTitle, metadataArtist, metadataAlbum);
     return true;
 }
 
 void PlaybackController::playPreviousTrack()
 {
     const auto shouldKeepPlaying = state.playbackIsPlaying;
+
+    if (state.playbackMode == PlaybackMode::repeatOne)
+    {
+        restartCurrentTrack();
+
+        if (shouldKeepPlaying)
+            startPlayback();
+        else
+            state.statusText = "loaded " + state.currentTrackTitle.toLowerCase();
+
+        return;
+    }
 
     if (state.playbackMode == PlaybackMode::shuffleFolder)
     {
@@ -542,6 +908,19 @@ void PlaybackController::playPreviousTrack()
 void PlaybackController::playNextTrack()
 {
     const auto shouldKeepPlaying = state.playbackIsPlaying;
+
+    if (state.playbackMode == PlaybackMode::repeatOne)
+    {
+        restartCurrentTrack();
+
+        if (shouldKeepPlaying)
+            startPlayback();
+        else
+            state.statusText = "loaded " + state.currentTrackTitle.toLowerCase();
+
+        return;
+    }
+
     const auto targetIndex = getTrackIndexForNavigation (true);
 
     const auto shouldRecordHistory = state.playbackMode == PlaybackMode::shuffleFolder
@@ -564,6 +943,7 @@ void PlaybackController::restartCurrentTrack()
         return;
 
     const juce::ScopedLock lock (state.audioSourceLock);
+    clearSeekTransitionState (state);
     state.transportSource.setPosition (0.0);
     state.playbackFinishedHandled = false;
 }
@@ -681,47 +1061,48 @@ void PlaybackController::setPlaybackMode (PlaybackMode mode)
 
 void PlaybackController::startPlayback()
 {
-    juce::Logger::writeToLog ("startPlayback requested for track: " + state.currentTrackTitle
-                              + " | playing=" + juce::String (state.playbackIsPlaying ? "true" : "false"));
-
     if (state.readerSource == nullptr)
     {
         if (! loadAudioFileAtIndex (state.currentAudioFileIndex < 0 ? 0 : state.currentAudioFileIndex))
             return;
     }
 
-    if (state.currentTrackDurationSeconds > 0.0 && state.transportSource.getCurrentPosition() >= state.currentTrackDurationSeconds)
+    if (state.pausedPositionValid)
+    {
+        auto resumePosition = state.pausedPositionSeconds;
+
+        if (state.currentTrackDurationSeconds > 0.0 && resumePosition >= state.currentTrackDurationSeconds)
+            resumePosition = 0.0;
+
+        const juce::ScopedLock lock (state.audioSourceLock);
+        clearSeekTransitionState (state);
+        state.transportSource.setPosition (juce::jmax (0.0, resumePosition));
+        state.pausedPositionValid = false;
+    }
+    else if (state.currentTrackDurationSeconds > 0.0 && state.transportSource.getCurrentPosition() >= state.currentTrackDurationSeconds)
+    {
         restartCurrentTrack();
+    }
 
     state.playbackFinishedHandled = false;
-
-    juce::Logger::writeToLog (juce::String ("transport before start: playing=")
-                              + (state.transportSource.isPlaying() ? "true" : "false")
-                              + " | position=" + juce::String (state.transportSource.getCurrentPosition(), 2));
 
     if (! state.transportSource.isPlaying())
         state.transportSource.start();
 
-    juce::Logger::writeToLog (juce::String ("transport after start: playing=")
-                              + (state.transportSource.isPlaying() ? "true" : "false")
-                              + " | position=" + juce::String (state.transportSource.getCurrentPosition(), 2));
-
     state.playbackIsPlaying = true;
+    state.pauseMuteRequestPending.store (false);
+    state.pauseUnmuteRequestPending.store (true);
     state.statusText = "playing " + state.currentTrackTitle.toLowerCase();
 }
 
 void PlaybackController::pausePlayback()
 {
-    juce::Logger::writeToLog ("pausePlayback requested for track: " + state.currentTrackTitle);
-
-    if (state.transportSource.isPlaying())
-        state.transportSource.stop();
-
-    juce::Logger::writeToLog (juce::String ("transport after pause: playing=")
-                              + (state.transportSource.isPlaying() ? "true" : "false")
-                              + " | position=" + juce::String (state.transportSource.getCurrentPosition(), 2));
-
+    state.pausedPositionSeconds = state.transportSource.getCurrentPosition();
+    state.pausedPositionValid = state.readerSource != nullptr;
     state.playbackIsPlaying = false;
+    state.seekRequestPending.store (false);
+    state.pauseUnmuteRequestPending.store (false);
+    state.pauseMuteRequestPending.store (true);
     state.statusText = state.readerSource == nullptr ? "paused" : "paused " + state.currentTrackTitle.toLowerCase();
 }
 
@@ -734,9 +1115,19 @@ void PlaybackController::seekTo (double positionSeconds)
                               ? juce::jlimit (0.0, state.currentTrackDurationSeconds, positionSeconds)
                               : juce::jmax (0.0, positionSeconds);
 
-    const juce::ScopedLock lock (state.audioSourceLock);
-    state.transportSource.setPosition (targetPosition);
-    state.playbackFinishedHandled = false;
+    if (! state.playbackIsPlaying)
+    {
+        const juce::ScopedLock lock (state.audioSourceLock);
+        clearSeekTransitionState (state);
+        state.transportSource.setPosition (targetPosition);
+        state.pausedPositionSeconds = targetPosition;
+        state.pausedPositionValid = true;
+        state.playbackFinishedHandled = false;
+        return;
+    }
+
+    state.seekRequestPositionSeconds.store (targetPosition);
+    state.seekRequestPending.store (true);
 }
 
 void PlaybackController::handlePlaybackFinished()
@@ -745,6 +1136,17 @@ void PlaybackController::handlePlaybackFinished()
         return;
 
     state.playbackFinishedHandled = true;
+
+    if (state.playbackMode == PlaybackMode::repeatOne)
+    {
+        if (state.readerSource != nullptr)
+        {
+            restartCurrentTrack();
+            startPlayback();
+        }
+
+        return;
+    }
 
     const auto folderTracks = getCurrentFolderTracks();
 
@@ -763,16 +1165,12 @@ void PlaybackController::handlePlaybackFinished()
     switch (state.playbackMode)
     {
         case PlaybackMode::repeatOne:
-            juce::Logger::writeToLog ("handlePlaybackFinished -> repeatOne");
-            if (loadAudioFile (folderTracks[static_cast<size_t> (currentIndex)]))
-                startPlayback();
             break;
 
         case PlaybackMode::repeatFolder:
         {
             const auto nextIndex = (currentIndex + 1) % static_cast<int> (folderTracks.size());
 
-            juce::Logger::writeToLog ("handlePlaybackFinished -> repeatFolder");
             if (loadAudioFile (folderTracks[static_cast<size_t> (nextIndex)]))
                 startPlayback();
 
@@ -783,7 +1181,6 @@ void PlaybackController::handlePlaybackFinished()
         {
             if (folderTracks.size() == 1)
             {
-                juce::Logger::writeToLog ("handlePlaybackFinished -> shuffleFolder(single)");
                 if (loadAudioFile (folderTracks.front()))
                     startPlayback();
 
@@ -799,7 +1196,6 @@ void PlaybackController::handlePlaybackFinished()
             if (nextIndex == currentIndex)
                 nextIndex = (currentIndex + 1) % static_cast<int> (folderTracks.size());
 
-            juce::Logger::writeToLog ("handlePlaybackFinished -> shuffleFolder");
             if (state.currentAudioFileName.isNotEmpty())
                 navigationHistory.push_back (state.currentAudioFileName);
 
@@ -837,6 +1233,9 @@ bool PlaybackController::hasCurrentTrackEnded() const
 
 double PlaybackController::getCurrentPosition() const
 {
+    if (! state.playbackIsPlaying && state.pausedPositionValid)
+        return state.pausedPositionSeconds;
+
     return state.transportSource.getCurrentPosition();
 }
 
@@ -892,6 +1291,11 @@ NowPlayingTrack PlaybackController::getNowPlayingTrack() const
     track.isPlaying = isPlaybackActive();
     track.artwork = state.currentTrackArtwork;
     return track;
+}
+
+bool PlaybackController::consumeMetadataUpdatePending()
+{
+    return state.metadataUpdatePending.exchange (false);
 }
 
 std::shared_ptr<juce::AudioPluginInstance> PlaybackController::getPluginInstance() const

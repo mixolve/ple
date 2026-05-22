@@ -21,7 +21,6 @@ public:
     void setPlaybackModeText (const juce::String& text);
     void setStatusText (const juce::String& text);
     void setPlaybackActive (bool isPlaying);
-    void setChoosePluginEnabled (bool enabled);
     void setOpenPluginGuiEnabled (bool enabled);
     void setOpenPluginGuiText (const juce::String& text);
 
