@@ -1,1 +1,0 @@
-ple-V01.00-ios.zip contains .app which includes .auv3
