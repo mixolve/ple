@@ -1,3 +1,3 @@
 [all-in-web](https://mixolve.cc/)
 
-V:01
+VIBECODED. V:02

@@ -32,7 +32,11 @@ public:
 
     void choosePlugin();
     void handlePluginMenuSelection (int selectedIndex);
-    void loadPluginDescription (const juce::PluginDescription& description, bool openGuiAfterLoad = false);
+    void loadPluginDescription (const juce::PluginDescription& description,
+                                bool openGuiAfterLoad = false,
+                                bool restoreSavedState = false);
+    void restoreLastPlugin (bool openGuiAfterLoad = false);
+    void unloadPlugin();
     void openPluginGui();
     void closePluginMenu();
     void closePluginWindow();
@@ -55,6 +59,9 @@ private:
     void destroyPluginWindow();
     void showPluginTransitionCover();
     void hidePluginTransitionCover();
+    void saveCurrentPluginState() const;
+    juce::MemoryBlock loadSavedPluginState (const juce::PluginDescription& description) const;
+    const juce::PluginDescription* findSavedPluginDescription() const;
 
     juce::Component* parentComponent = nullptr;
     std::function<ple::PlaybackController*()> getPlaybackController;
@@ -74,6 +81,8 @@ private:
 
     juce::AudioUnitPluginFormat audioUnitFormat;
     std::vector<juce::PluginDescription> installedPluginDescriptions;
+    juce::PluginDescription currentPluginDescription;
     juce::String currentPluginIdentifier;
+    bool hasCurrentPluginDescription = false;
     int pluginLoadToken = 0;
 };

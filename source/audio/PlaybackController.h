@@ -132,6 +132,8 @@ public:
 
     std::shared_ptr<juce::AudioPluginInstance> getPluginInstance() const;
     bool hasPluginInstance() const;
+    bool copyPluginStateInformation (juce::MemoryBlock& destination);
+    bool applyPluginStateInformation (const juce::MemoryBlock& source);
     void clearPluginInstance();
     void setPluginInstance (std::shared_ptr<juce::AudioPluginInstance> newInstance);
 

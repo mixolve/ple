@@ -2,6 +2,7 @@
 
 #include "plugins/AudioUnitPluginHost.h"
 
+#include "audio/AudioFiles.h"
 #include "ui/PopupViews.h"
 
 #include <algorithm>
@@ -11,6 +12,9 @@
 namespace
 {
 const auto pluginTransitionCoverColour = juce::Colour (0xff000000);
+constexpr auto savedPluginStateFileName = "last-plugin.xml";
+constexpr auto savedPluginStateRootTag = "PLE_PLUGIN_STATE";
+constexpr auto savedPluginStateTag = "STATE";
 
 class TransitionCover final : public juce::Component
 {
@@ -170,6 +174,47 @@ static const juce::PluginDescription* findPluginDescriptionForQuery (const std::
 
     return nullptr;
 }
+
+static juce::File getSavedPluginStateFile()
+{
+    return ple::getAudioRootDirectory().getChildFile (savedPluginStateFileName);
+}
+
+static bool descriptionsReferToSamePlugin (const juce::PluginDescription& left,
+                                           const juce::PluginDescription& right)
+{
+    return left.fileOrIdentifier == right.fileOrIdentifier
+        || left.matchesIdentifierString (right.createIdentifierString())
+        || right.matchesIdentifierString (left.createIdentifierString());
+}
+
+static std::unique_ptr<juce::XmlElement> readSavedPluginStateXml()
+{
+    const auto stateFile = getSavedPluginStateFile();
+
+    if (! stateFile.existsAsFile())
+        return {};
+
+    auto xml = juce::parseXML (stateFile);
+
+    if (xml == nullptr || ! xml->hasTagName (savedPluginStateRootTag))
+        return {};
+
+    return xml;
+}
+
+static bool loadSavedPluginDescription (juce::PluginDescription& description)
+{
+    auto xml = readSavedPluginStateXml();
+
+    if (xml == nullptr)
+        return false;
+
+    if (auto* pluginXml = xml->getChildByName ("PLUGIN"))
+        return description.loadFromXml (*pluginXml);
+
+    return false;
+}
 }
 
 void AudioUnitPluginHost::initialise (Dependencies dependencies)
@@ -192,6 +237,7 @@ void AudioUnitPluginHost::initialise (Dependencies dependencies)
 
 void AudioUnitPluginHost::reset()
 {
+    saveCurrentPluginState();
     closePluginMenu();
     destroyPluginWindow();
 }
@@ -233,6 +279,14 @@ void AudioUnitPluginHost::armPluginWindowPaintCallback()
     if (auto* frame = dynamic_cast<PluginWindowFrame*> (pluginWindowHost.get()))
     {
         frame->setPaintCallback ([weakSelf = weak_from_this()]
+        {
+            if (auto self = weakSelf.lock())
+                self->hidePluginTransitionCover();
+        });
+    }
+    else
+    {
+        juce::MessageManager::callAsync ([weakSelf = weak_from_this()]
         {
             if (auto self = weakSelf.lock())
                 self->hidePluginTransitionCover();
@@ -313,10 +367,13 @@ void AudioUnitPluginHost::handlePluginMenuSelection (int selectedIndex)
     loadPluginDescription (installedPluginDescriptions[static_cast<size_t> (selectedIndex)]);
 }
 
-void AudioUnitPluginHost::loadPluginDescription (const juce::PluginDescription& description, bool openGuiAfterLoad)
+void AudioUnitPluginHost::loadPluginDescription (const juce::PluginDescription& description,
+                                                 bool openGuiAfterLoad,
+                                                 bool restoreSavedState)
 {
     auto* playbackController = getPlaybackController != nullptr ? getPlaybackController() : nullptr;
 
+    saveCurrentPluginState();
     destroyPluginWindow();
 
     if (playbackController != nullptr)
@@ -337,8 +394,8 @@ void AudioUnitPluginHost::loadPluginDescription (const juce::PluginDescription& 
     audioUnitFormat.createPluginInstanceAsync (description,
                                                currentSampleRate,
                                                currentBlockSize,
-                                               [weakSelf = weak_from_this(), loadToken, openGuiAfterLoad, description] (std::unique_ptr<juce::AudioPluginInstance> instance,
-                                                                                                                        const juce::String& errorMessage) mutable
+                                               [weakSelf = weak_from_this(), loadToken, openGuiAfterLoad, restoreSavedState, description] (std::unique_ptr<juce::AudioPluginInstance> instance,
+                                                                                                                                           const juce::String& errorMessage) mutable
                                                {
                                                    if (auto self = weakSelf.lock())
                                                    {
@@ -347,21 +404,46 @@ void AudioUnitPluginHost::loadPluginDescription (const juce::PluginDescription& 
 
                                                        if (instance != nullptr)
                                                        {
+                                                           juce::MemoryBlock savedState;
+                                                           size_t restoredStateSize = 0;
+
+                                                           if (restoreSavedState)
+                                                           {
+                                                               savedState = self->loadSavedPluginState (description);
+                                                               restoredStateSize = savedState.getSize();
+                                                           }
+
                                                            auto sharedInstance = std::shared_ptr<juce::AudioPluginInstance> (instance.release());
+                                                           self->currentPluginDescription = description;
                                                            self->currentPluginIdentifier = description.fileOrIdentifier;
+                                                           self->hasCurrentPluginDescription = true;
 
                                                            if (self->pluginMenuHost != nullptr)
                                                                self->pluginMenuHost->repaint();
 
                                                            if (auto* controller = self->getPlaybackController != nullptr ? self->getPlaybackController() : nullptr)
+                                                           {
                                                                controller->setPluginInstance (std::move (sharedInstance));
+
+                                                               if (restoredStateSize > 0)
+                                                                   controller->applyPluginStateInformation (savedState);
+                                                           }
 
                                                            self->destroyPluginWindow();
 
                                                            if (self->syncPlaybackUi)
                                                                self->syncPlaybackUi();
 
-                                                           self->setPluginStatus ("plugin loaded");
+                                                           if (restoreSavedState)
+                                                           {
+                                                               self->setPluginStatus (restoredStateSize > 0
+                                                                                          ? "plugin loaded (restored " + juce::String (static_cast<int64> (restoredStateSize)) + " bytes)"
+                                                                                          : "plugin loaded (no saved state)");
+                                                           }
+                                                           else
+                                                           {
+                                                               self->setPluginStatus ("plugin loaded");
+                                                           }
 
                                                            if (openGuiAfterLoad)
                                                            {
@@ -384,6 +466,40 @@ void AudioUnitPluginHost::loadPluginDescription (const juce::PluginDescription& 
                                                        }
                                                    }
                                                });
+}
+
+void AudioUnitPluginHost::restoreLastPlugin (bool openGuiAfterLoad)
+{
+    if (const auto* description = findSavedPluginDescription())
+    {
+        setPluginStatus ("restoring plugin");
+        loadPluginDescription (*description, openGuiAfterLoad, true);
+    }
+}
+
+void AudioUnitPluginHost::unloadPlugin()
+{
+    saveCurrentPluginState();
+    ++pluginLoadToken;
+
+    closePluginMenu();
+    destroyPluginWindow();
+
+    if (auto* playbackController = getPlaybackController != nullptr ? getPlaybackController() : nullptr)
+        playbackController->clearPluginInstance();
+
+    currentPluginIdentifier.clear();
+    hasCurrentPluginDescription = false;
+
+    if (setOpenPluginGuiEnabled)
+        setOpenPluginGuiEnabled (false);
+
+    setPluginGuiButtonText ("PLUG");
+
+    if (syncPlaybackUi)
+        syncPlaybackUi();
+
+    setPluginStatus ("plugin unloaded");
 }
 
 void AudioUnitPluginHost::closePluginMenu()
@@ -563,4 +679,78 @@ int AudioUnitPluginHost::getSelectedPluginIndex() const
     }
 
     return -1;
+}
+
+void AudioUnitPluginHost::saveCurrentPluginState() const
+{
+    if (! hasCurrentPluginDescription)
+        return;
+
+    auto* playbackController = getPlaybackController != nullptr ? getPlaybackController() : nullptr;
+
+    if (playbackController == nullptr)
+        return;
+
+    juce::MemoryBlock pluginState;
+
+    if (! playbackController->copyPluginStateInformation (pluginState))
+        return;
+
+    juce::XmlElement xml (savedPluginStateRootTag);
+    xml.setAttribute ("version", 1);
+    xml.setAttribute ("identifier", currentPluginDescription.createIdentifierString());
+
+    if (auto descriptionXml = currentPluginDescription.createXml())
+        xml.addChildElement (descriptionXml.release());
+
+    auto* stateXml = xml.createNewChildElement (savedPluginStateTag);
+    stateXml->setAttribute ("encoding", "memoryblock-base64");
+    stateXml->addTextElement (pluginState.toBase64Encoding());
+
+    getSavedPluginStateFile().replaceWithText (xml.toString());
+}
+
+juce::MemoryBlock AudioUnitPluginHost::loadSavedPluginState (const juce::PluginDescription& description) const
+{
+    juce::MemoryBlock pluginState;
+    auto xml = readSavedPluginStateXml();
+
+    if (xml == nullptr)
+        return pluginState;
+
+    juce::PluginDescription savedDescription;
+
+    if (auto* pluginXml = xml->getChildByName ("PLUGIN"))
+    {
+        if (! savedDescription.loadFromXml (*pluginXml)
+            || ! descriptionsReferToSamePlugin (savedDescription, description))
+        {
+            return pluginState;
+        }
+    }
+    else
+    {
+        return pluginState;
+    }
+
+    if (auto* stateXml = xml->getChildByName (savedPluginStateTag))
+        pluginState.fromBase64Encoding (stateXml->getAllSubText());
+
+    return pluginState;
+}
+
+const juce::PluginDescription* AudioUnitPluginHost::findSavedPluginDescription() const
+{
+    juce::PluginDescription savedDescription;
+
+    if (! loadSavedPluginDescription (savedDescription))
+        return nullptr;
+
+    for (const auto& description : installedPluginDescriptions)
+    {
+        if (descriptionsReferToSamePlugin (description, savedDescription))
+            return &description;
+    }
+
+    return nullptr;
 }

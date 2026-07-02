@@ -1308,6 +1308,31 @@ bool PlaybackController::hasPluginInstance() const
     return getPluginInstance() != nullptr;
 }
 
+bool PlaybackController::copyPluginStateInformation (juce::MemoryBlock& destination)
+{
+    const juce::ScopedLock lock (state.pluginStateLock);
+    auto activePlugin = std::atomic_load (&state.pluginInstance);
+
+    if (activePlugin == nullptr)
+        return false;
+
+    destination.reset();
+    activePlugin->getStateInformation (destination);
+    return true;
+}
+
+bool PlaybackController::applyPluginStateInformation (const juce::MemoryBlock& source)
+{
+    const juce::ScopedLock lock (state.pluginStateLock);
+    auto activePlugin = std::atomic_load (&state.pluginInstance);
+
+    if (activePlugin == nullptr || source.getSize() == 0)
+        return false;
+
+    activePlugin->setStateInformation (source.getData(), static_cast<int> (source.getSize()));
+    return true;
+}
+
 void PlaybackController::clearPluginInstance()
 {
     const juce::ScopedLock lock (state.pluginStateLock);

@@ -35,6 +35,7 @@ MainComponent::MainComponent()
         [this] { cyclePlaybackMode(); },
         [this] { choosePlugin(); },
         [this] { openPluginGui(); },
+        [this] { clearPlugin(); },
         [this] { openNowPlayingWindow(); },
         [this] { openAboutWindow(); },
         [this] { browseAudioFiles(); });
@@ -171,7 +172,13 @@ MainComponent::MainComponent()
     const auto automationPlayOnLaunch = juce::SystemStats::getEnvironmentVariable ("PLE_AUTOMATION_PLAY", "0").trim() != "0";
 
     if (const auto* automationPlugin = pluginHost->findPluginDescriptionForQuery (automationPluginQuery))
+    {
         pluginHost->loadPluginDescription (*automationPlugin, automationOpenGuiAfterLoad);
+    }
+    else if (automationPluginQuery.isEmpty())
+    {
+        pluginHost->restoreLastPlugin (automationOpenGuiAfterLoad);
+    }
 
     if (automationShowPluginMenu)
     {
@@ -392,6 +399,14 @@ void MainComponent::openPluginGui()
 
     if (pluginHost != nullptr)
         pluginHost->openPluginGui();
+}
+
+void MainComponent::clearPlugin()
+{
+    closeAboutWindow();
+
+    if (pluginHost != nullptr)
+        pluginHost->unloadPlugin();
 }
 
 void MainComponent::openAboutWindow()

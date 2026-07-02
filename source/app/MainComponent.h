@@ -51,6 +51,7 @@ private:
     void refreshAudioBrowserDirectory();
     void removeAudioFile (const juce::File& file);
     void openPluginGui();
+    void clearPlugin();
     void openAboutWindow();
     void closeAboutWindow();
     void openNowPlayingWindow();

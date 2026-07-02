@@ -29,6 +29,7 @@ MainView::MainView (Action previousAction,
                     Action playbackModeAction,
                     Action choosePluginAction,
                     Action openPluginGuiAction,
+                    Action clearPluginAction,
                     Action nowPlayingAction,
                     Action aboutAction,
                     Action browseAction)
@@ -80,7 +81,12 @@ MainView::MainView (Action previousAction,
 
     openPluginGuiButton.setButtonText ("PLUG");
     openPluginGuiButton.getProperties().set ("accent", "white");
-    openPluginGuiButton.onClick = [action = std::move (openPluginGuiAction)]
+    openPluginGuiButton.onShortRelease = [action = std::move (openPluginGuiAction)]
+    {
+        if (action)
+            action();
+    };
+    openPluginGuiButton.onLongPressRelease = [action = std::move (clearPluginAction)]
     {
         if (action)
             action();
@@ -124,11 +130,82 @@ MainView::MainView (Action previousAction,
 
     setPlaybackActive (false);
 
-    for (auto* button : { &playbackModeButton, &previousButton, &playButton, &nextButton, &choosePluginButton, &openPluginGuiButton, &nowButton, &browseButton, &footerButton })
+    for (auto* button : { static_cast<juce::Button*> (&playbackModeButton),
+                          static_cast<juce::Button*> (&previousButton),
+                          static_cast<juce::Button*> (&playButton),
+                          static_cast<juce::Button*> (&nextButton),
+                          static_cast<juce::Button*> (&choosePluginButton),
+                          static_cast<juce::Button*> (&openPluginGuiButton),
+                          static_cast<juce::Button*> (&nowButton),
+                          static_cast<juce::Button*> (&browseButton),
+                          static_cast<juce::Button*> (&footerButton) })
     {
         button->setWantsKeyboardFocus (false);
         button->setMouseClickGrabsKeyboardFocus (false);
     }
+}
+
+void MainView::LongPressButton::mouseDown (const juce::MouseEvent& event)
+{
+    pressCandidate = isEnabled();
+    longPressReady = false;
+    pointerInside = getLocalBounds().contains (event.position.toInt());
+
+    if (pressCandidate)
+        startTimer (longPressDelayMs);
+
+    juce::TextButton::mouseDown (event);
+}
+
+void MainView::LongPressButton::mouseDrag (const juce::MouseEvent& event)
+{
+    pointerInside = getLocalBounds().contains (event.position.toInt());
+    juce::TextButton::mouseDrag (event);
+}
+
+void MainView::LongPressButton::mouseUp (const juce::MouseEvent& event)
+{
+    const auto shouldClear = longPressReady && getLocalBounds().contains (event.position.toInt());
+    const auto shouldOpen = ! longPressReady && getLocalBounds().contains (event.position.toInt());
+
+    resetLongPressState();
+    juce::TextButton::mouseUp (event);
+
+    if (shouldClear)
+    {
+        if (onLongPressRelease)
+            onLongPressRelease();
+
+        return;
+    }
+
+    if (shouldOpen && onShortRelease)
+        onShortRelease();
+}
+
+void MainView::LongPressButton::timerCallback()
+{
+    stopTimer();
+
+    if (! pressCandidate || ! pointerInside)
+        return;
+
+    longPressReady = true;
+    textBeforeLongPress = getButtonText();
+    setButtonText ("CLS?");
+}
+
+void MainView::LongPressButton::resetLongPressState()
+{
+    stopTimer();
+
+    if (longPressReady)
+        setButtonText (textBeforeLongPress.isNotEmpty() ? textBeforeLongPress : "PLUG");
+
+    pressCandidate = false;
+    longPressReady = false;
+    pointerInside = false;
+    textBeforeLongPress.clear();
 }
 
 void MainView::setPlaybackModeText (const juce::String& text)

@@ -14,6 +14,7 @@ public:
               Action playbackModeAction,
               Action choosePluginAction,
               Action openPluginGuiAction,
+              Action clearPluginAction,
               Action nowPlayingAction,
               Action aboutAction,
               Action browseAction);
@@ -34,12 +35,36 @@ public:
     void resized() override;
 
 private:
+    class LongPressButton final : public juce::TextButton,
+                                  private juce::Timer
+    {
+    public:
+        using juce::TextButton::TextButton;
+
+        Action onShortRelease;
+        Action onLongPressRelease;
+
+        void mouseDown (const juce::MouseEvent& event) override;
+        void mouseDrag (const juce::MouseEvent& event) override;
+        void mouseUp (const juce::MouseEvent& event) override;
+
+    private:
+        void timerCallback() override;
+        void resetLongPressState();
+
+        juce::String textBeforeLongPress;
+        bool pressCandidate = false;
+        bool longPressReady = false;
+        bool pointerInside = false;
+        static constexpr int longPressDelayMs = 550;
+    };
+
     juce::TextButton previousButton;
     juce::TextButton playButton;
     juce::TextButton nextButton;
     juce::TextButton playbackModeButton;
     juce::TextButton choosePluginButton;
-    juce::TextButton openPluginGuiButton;
+    LongPressButton openPluginGuiButton;
     juce::TextButton nowButton;
     juce::TextButton browseButton;
     juce::Label statusLabel;
