@@ -51,7 +51,6 @@ MainComponent::MainComponent()
         [this] { playPreviousTrack(); },
         [this] (double positionSeconds) { seekPlayback (positionSeconds); }
     });
-    lockScreenController->activate();
 
     audioBrowser->initialise ({
         *this,
@@ -321,7 +320,7 @@ void MainComponent::syncPlaybackUi()
         setOpenPluginGuiEnabled (playbackController->hasPluginInstance());
         refreshNowPlayingWindow();
 
-        if (lockScreenController != nullptr)
+        if (lockScreenActive && lockScreenController != nullptr)
             lockScreenController->updateNowPlaying (playbackController->getNowPlayingTrack());
     }
 }
@@ -571,6 +570,10 @@ void MainComponent::startPlayback()
 
     ensureAudioOutputActive();
     playbackController->startPlayback();
+
+    if (playbackController->isPlaybackActive())
+        ensureLockScreenActive();
+
     syncPlaybackUi();
 }
 
@@ -594,6 +597,15 @@ void MainComponent::ensureAudioOutputActive()
 
     setAudioChannels (0, 2);
     audioOutputActive = true;
+}
+
+void MainComponent::ensureLockScreenActive()
+{
+    if (lockScreenActive || lockScreenController == nullptr)
+        return;
+
+    lockScreenController->activate();
+    lockScreenActive = true;
 }
 
 void MainComponent::suspendAudioOutputForPause()

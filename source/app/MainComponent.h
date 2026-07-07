@@ -39,6 +39,7 @@ private:
     juce::String getPlaybackModeLabel() const;
     void startPlayback();
     void pausePlayback();
+    void ensureLockScreenActive();
     void ensureAudioOutputActive();
     void suspendAudioOutputForPause();
     void seekPlayback (double positionSeconds);
@@ -77,6 +78,7 @@ private:
     std::unique_ptr<ple::PlaybackController> playbackController;
     bool audioBrowserDirectoryRefreshPending = false;
     bool audioOutputActive = false;
+    bool lockScreenActive = false;
 
     std::unique_ptr<juce::LookAndFeel_V4> lookAndFeel;
 
