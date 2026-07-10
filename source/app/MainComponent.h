@@ -58,6 +58,8 @@ private:
     void openNowPlayingWindow();
     void closeNowPlayingWindow();
     void refreshNowPlayingWindow();
+    bool hasVisibleWindow() const;
+    void ensureNowPlayingWindowOpen();
     void syncPlaybackUi();
     void scheduleAudioBrowserDirectoryRefresh();
     void setStatusText (const juce::String& text);

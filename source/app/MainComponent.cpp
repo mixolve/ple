@@ -155,6 +155,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (choosePluginButton);
 
     setSize (420, 248);
+    ensureNowPlayingWindowOpen();
     ensureAudioOutputActive();
     startTimerHz (4);
     updatePlaybackModeButton();
@@ -327,6 +328,13 @@ void MainComponent::syncPlaybackUi()
 
 void MainComponent::browseAudioFiles()
 {
+    if (audioBrowser != nullptr
+        && (audioBrowser->isAudioBrowserVisible() || audioBrowser->isBrowserActionPopupVisible()))
+    {
+        setStatusText ("browser open");
+        return;
+    }
+
     closeAboutWindow();
 
     if (audioBrowser != nullptr)
@@ -390,6 +398,8 @@ void MainComponent::choosePlugin()
 
     if (pluginHost != nullptr)
         pluginHost->choosePlugin();
+
+    ensureNowPlayingWindowOpen();
 }
 
 void MainComponent::openPluginGui()
@@ -398,6 +408,8 @@ void MainComponent::openPluginGui()
 
     if (pluginHost != nullptr)
         pluginHost->openPluginGui();
+
+    ensureNowPlayingWindowOpen();
 }
 
 void MainComponent::clearPlugin()
@@ -406,13 +418,15 @@ void MainComponent::clearPlugin()
 
     if (pluginHost != nullptr)
         pluginHost->unloadPlugin();
+
+    ensureNowPlayingWindowOpen();
 }
 
 void MainComponent::openAboutWindow()
 {
     if (aboutWindowHost != nullptr)
     {
-        closeAboutWindow();
+        setStatusText ("about open");
         return;
     }
 
@@ -449,16 +463,13 @@ void MainComponent::closeAboutWindow()
 
 void MainComponent::openNowPlayingWindow()
 {
-    closeAboutWindow();
-
     if (nowPlayingWindowHost != nullptr)
     {
-        closeNowPlayingWindow();
-
-        setStatusText ("now window closed");
-
+        setStatusText ("now window open");
         return;
     }
+
+    closeAboutWindow();
 
     if (pluginHost != nullptr)
     {
@@ -504,6 +515,26 @@ void MainComponent::refreshNowPlayingWindow()
 {
     if (nowPlayingContent != nullptr && playbackController != nullptr)
         nowPlayingContent->setTrack (playbackController->getNowPlayingTrack());
+}
+
+bool MainComponent::hasVisibleWindow() const
+{
+    if (aboutWindowHost != nullptr || nowPlayingWindowHost != nullptr)
+        return true;
+
+    if (audioBrowser != nullptr
+        && (audioBrowser->isAudioBrowserVisible() || audioBrowser->isBrowserActionPopupVisible()))
+    {
+        return true;
+    }
+
+    return pluginHost != nullptr && pluginHost->isPluginSurfaceVisible();
+}
+
+void MainComponent::ensureNowPlayingWindowOpen()
+{
+    if (! hasVisibleWindow())
+        openNowPlayingWindow();
 }
 
 void MainComponent::refreshAudioLibrary()

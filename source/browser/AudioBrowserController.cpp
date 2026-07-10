@@ -67,6 +67,11 @@ bool AudioBrowserController::isAudioBrowserVisible() const
     return audioBrowserHost != nullptr;
 }
 
+bool AudioBrowserController::isBrowserActionPopupVisible() const
+{
+    return browserActionHost != nullptr;
+}
+
 void AudioBrowserController::browseAudioFiles()
 {
     if (closePluginMenu)

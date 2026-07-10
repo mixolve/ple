@@ -16,6 +16,7 @@ public:
     void setPaintCallback (PaintCallback callback);
 
     void paint (juce::Graphics& g) override;
+    void paintOverChildren (juce::Graphics& g) override;
     void resized() override;
 
     juce::Component* getContentComponent() const noexcept;

@@ -12,6 +12,8 @@
 namespace
 {
 const auto pluginTransitionCoverColour = juce::Colour (0xff000000);
+const auto pluginWindowFrameBackgroundColour = juce::Colour (0xff242424);
+const auto pluginWindowFrameBorderColour = juce::Colour (0xff707070);
 constexpr auto savedPluginStateFileName = "last-plugin.xml";
 constexpr auto savedPluginStateRootTag = "PLE_PLUGIN_STATE";
 constexpr auto savedPluginStateTag = "STATE";
@@ -217,6 +219,15 @@ static bool loadSavedPluginDescription (juce::PluginDescription& description)
 }
 }
 
+void AudioUnitPluginHost::PluginWindowAnchor::paint (juce::Graphics& g)
+{
+    g.setColour (pluginWindowFrameBackgroundColour);
+    g.fillAll();
+
+    g.setColour (pluginWindowFrameBorderColour);
+    g.drawRect (getLocalBounds(), 1);
+}
+
 void AudioUnitPluginHost::initialise (Dependencies dependencies)
 {
     parentComponent = &dependencies.parentComponent;
@@ -229,6 +240,7 @@ void AudioUnitPluginHost::initialise (Dependencies dependencies)
     syncPlaybackUi = std::move (dependencies.syncPlaybackUi);
     getPluginWindowBounds = std::move (dependencies.getPluginWindowBounds);
 
+    pluginWindowAnchor.setOpaque (true);
     pluginWindowAnchor.setInterceptsMouseClicks (false, true);
 
     if (parentComponent != nullptr)
@@ -306,18 +318,17 @@ const juce::PluginDescription* AudioUnitPluginHost::findPluginDescriptionForQuer
 
 void AudioUnitPluginHost::choosePlugin()
 {
+    if (isPluginMenuVisible())
+    {
+        setPluginStatus ("plugin selection open");
+        return;
+    }
+
     if (closeAudioBrowser)
         closeAudioBrowser();
 
     if (closeNowPlayingWindow)
         closeNowPlayingWindow();
-
-    if (pluginMenuHost != nullptr)
-    {
-        closePluginMenu();
-        setPluginStatus ("plugin selection closed");
-        return;
-    }
 
     destroyPluginWindow();
     setPluginGuiButtonText ("PLUG");
@@ -525,9 +536,7 @@ void AudioUnitPluginHost::openPluginGui()
     {
         if (pluginWindowVisible)
         {
-            closePluginWindow();
-            setPluginGuiButtonText ("PLUG");
-            setPluginStatus ("plugin gui closed");
+            setPluginStatus ("plugin gui open");
             return;
         }
 
@@ -576,7 +585,7 @@ void AudioUnitPluginHost::resized()
     pluginWindowAnchor.setBounds (pluginWindowBounds);
 
     if (pluginWindowHost != nullptr)
-        pluginWindowHost->setBounds (pluginWindowAnchor.getLocalBounds());
+        pluginWindowHost->setBounds (pluginWindowAnchor.getLocalBounds().reduced (1));
 
     if (pluginMenuHost != nullptr)
         pluginMenuHost->setBounds (pluginWindowBounds);
@@ -606,7 +615,7 @@ bool AudioUnitPluginHost::ensurePluginWindowHost()
 
         const auto pluginWindowBounds = getResolvedPluginWindowBounds();
         pluginWindowAnchor.setBounds (pluginWindowBounds);
-        pluginWindowHost->setBounds (pluginWindowAnchor.getLocalBounds());
+        pluginWindowHost->setBounds (pluginWindowAnchor.getLocalBounds().reduced (1));
 
         pluginWindowAnchor.addChildComponent (*pluginWindowHost);
         return true;
@@ -623,7 +632,7 @@ void AudioUnitPluginHost::showPluginWindow()
     const auto pluginWindowBounds = getResolvedPluginWindowBounds();
     pluginWindowAnchor.setBounds (pluginWindowBounds);
     pluginWindowAnchor.toFront (false);
-    pluginWindowHost->setBounds (pluginWindowAnchor.getLocalBounds());
+    pluginWindowHost->setBounds (pluginWindowAnchor.getLocalBounds().reduced (1));
     pluginWindowHost->setVisible (true);
     pluginWindowAnchor.setVisible (true);
     pluginWindowHost->toFront (true);
@@ -656,7 +665,7 @@ void AudioUnitPluginHost::showPluginTransitionCover()
     const auto pluginWindowBounds = getResolvedPluginWindowBounds();
 
     pluginWindowAnchor.setBounds (pluginWindowBounds);
-    pluginTransitionCover->setBounds (pluginWindowAnchor.getLocalBounds());
+    pluginTransitionCover->setBounds (pluginWindowAnchor.getLocalBounds().reduced (1));
     pluginTransitionCover->setVisible (true);
     pluginTransitionCover->toFront (true);
 }
@@ -679,6 +688,21 @@ int AudioUnitPluginHost::getSelectedPluginIndex() const
     }
 
     return -1;
+}
+
+bool AudioUnitPluginHost::isPluginMenuVisible() const
+{
+    return pluginMenuHost != nullptr;
+}
+
+bool AudioUnitPluginHost::isPluginWindowVisible() const
+{
+    return pluginWindowHost != nullptr && pluginWindowVisible;
+}
+
+bool AudioUnitPluginHost::isPluginSurfaceVisible() const
+{
+    return isPluginMenuVisible() || isPluginWindowVisible();
 }
 
 void AudioUnitPluginHost::saveCurrentPluginState() const

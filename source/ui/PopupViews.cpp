@@ -69,9 +69,6 @@ void PluginWindowFrame::paint (juce::Graphics& g)
     g.setColour (popupUiGrey800);
     g.fillAll();
 
-    g.setColour (popupUiGrey500);
-    g.drawRect (getLocalBounds(), 1);
-
     if (paintCallback != nullptr && ! paintCallbackScheduled)
     {
         paintCallbackScheduled = true;
@@ -83,6 +80,12 @@ void PluginWindowFrame::paint (juce::Graphics& g)
                 callback();
         });
     }
+}
+
+void PluginWindowFrame::paintOverChildren (juce::Graphics& g)
+{
+    g.setColour (popupUiGrey500);
+    g.drawRect (getLocalBounds(), 1);
 }
 
 void PluginWindowFrame::resized()

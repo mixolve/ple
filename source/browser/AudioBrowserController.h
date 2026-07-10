@@ -43,6 +43,7 @@ public:
     void closeBrowserActionPopup();
 
     bool isAudioBrowserVisible() const;
+    bool isBrowserActionPopupVisible() const;
 
     AudioBrowserController (const AudioBrowserController&) = delete;
     AudioBrowserController& operator= (const AudioBrowserController&) = delete;

@@ -42,6 +42,9 @@ public:
     void closePluginWindow();
     void resized();
     int getSelectedPluginIndex() const;
+    bool isPluginMenuVisible() const;
+    bool isPluginWindowVisible() const;
+    bool isPluginSurfaceVisible() const;
 
     AudioUnitPluginHost (const AudioUnitPluginHost&) = delete;
     AudioUnitPluginHost& operator= (const AudioUnitPluginHost&) = delete;
@@ -49,6 +52,12 @@ public:
     AudioUnitPluginHost& operator= (AudioUnitPluginHost&&) = delete;
 
 private:
+    class PluginWindowAnchor final : public juce::Component
+    {
+    public:
+        void paint (juce::Graphics& g) override;
+    };
+
     void setPluginStatus (const juce::String& text) const;
     void setPluginGuiButtonText (const juce::String& text) const;
     juce::Rectangle<int> getResolvedPluginWindowBounds() const;
@@ -73,7 +82,7 @@ private:
     std::function<void()> syncPlaybackUi;
     std::function<juce::Rectangle<int>()> getPluginWindowBounds;
 
-    juce::Component pluginWindowAnchor;
+    PluginWindowAnchor pluginWindowAnchor;
     std::unique_ptr<juce::Component> pluginWindowHost;
     std::unique_ptr<juce::Component> pluginMenuHost;
     std::unique_ptr<juce::Component> pluginTransitionCover;
