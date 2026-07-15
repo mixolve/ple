@@ -31,6 +31,29 @@ juce::Font makeUiFont (const bool bold = false, const float height = uiFontSize)
     return juce::Font (juce::FontOptions ("Sometype Mono", height, bold ? juce::Font::bold : juce::Font::plain));
 }
 
+juce_wchar toUppercaseCyrillicChar (const juce_wchar character) noexcept
+{
+    if (character >= 0x0430 && character <= 0x044f)
+        return static_cast<juce_wchar> (character - 0x20);
+
+    if (character >= 0x0450 && character <= 0x045f)
+        return static_cast<juce_wchar> (character - 0x50);
+
+    return character;
+}
+
+juce::String toUiUppercase (const juce::String& text)
+{
+    const auto upperText = text.toUpperCase();
+    juce::String result;
+    auto source = upperText.getCharPointer();
+
+    while (! source.isEmpty())
+        result << juce::String::charToString (toUppercaseCyrillicChar (source.getAndAdvance()));
+
+    return result;
+}
+
 juce::Colour getButtonAccentColour (const juce::Button& button)
 {
     const auto accent = button.getProperties().getWithDefault ("accent", "grey").toString();
@@ -185,7 +208,7 @@ public:
     {
         g.setFont (makeUiFont (true));
         g.setColour (uiWhite);
-        g.drawText (sectionName.toUpperCase(), area.reduced (8, 0), juce::Justification::centredLeft, true);
+        g.drawText (toUiUppercase (sectionName), area.reduced (8, 0), juce::Justification::centredLeft, true);
     }
 
     void drawPopupMenuItemWithOptions (juce::Graphics& g,
@@ -223,11 +246,11 @@ public:
 
         g.setColour (item.isEnabled ? uiWhite : uiGrey500);
         g.setFont (makeUiFont());
-        g.drawText (item.text.toUpperCase(), itemArea.reduced (10, 0), juce::Justification::centredLeft, true);
+        g.drawText (toUiUppercase (item.text), itemArea.reduced (10, 0), juce::Justification::centredLeft, true);
         if (item.shortcutKeyDescription.isNotEmpty())
         {
             g.setColour (item.isEnabled ? uiGrey500 : uiGrey700);
-            g.drawText (item.shortcutKeyDescription.toUpperCase(), itemArea.reduced (10, 0), juce::Justification::centredRight, true);
+            g.drawText (toUiUppercase (item.shortcutKeyDescription), itemArea.reduced (10, 0), juce::Justification::centredRight, true);
         }
     }
 

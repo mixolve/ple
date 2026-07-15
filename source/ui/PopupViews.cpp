@@ -39,6 +39,29 @@ juce::Font makePopupUiFont (const bool bold = false, const float height = popupU
 
     return juce::Font (juce::FontOptions ("Sometype Mono", height, bold ? juce::Font::bold : juce::Font::plain));
 }
+
+juce_wchar toUppercaseCyrillicChar (const juce_wchar character) noexcept
+{
+    if (character >= 0x0430 && character <= 0x044f)
+        return static_cast<juce_wchar> (character - 0x20);
+
+    if (character >= 0x0450 && character <= 0x045f)
+        return static_cast<juce_wchar> (character - 0x50);
+
+    return character;
+}
+
+juce::String toPopupUiUppercase (const juce::String& text)
+{
+    const auto upperText = text.toUpperCase();
+    juce::String result;
+    auto source = upperText.getCharPointer();
+
+    while (! source.isEmpty())
+        result << juce::String::charToString (toUppercaseCyrillicChar (source.getAndAdvance()));
+
+    return result;
+}
 }
 
 void GreyViewport::paint (juce::Graphics& g)
@@ -166,7 +189,7 @@ void PluginMenuContent::Surface::paint (juce::Graphics& g)
 
         g.setColour (popupUiWhite);
         g.setFont (makePopupUiFont());
-        g.drawText (descriptions[index].name.toUpperCase(), rowBounds.reduced (10, 0), juce::Justification::centredLeft, true);
+        g.drawText (toPopupUiUppercase (descriptions[index].name), rowBounds.reduced (10, 0), juce::Justification::centredLeft, true);
     }
 }
 
@@ -392,7 +415,7 @@ void FileBrowserContent::Surface::paint (juce::Graphics& g)
         }
 
         g.setColour (isMarked ? popupUiMarkedGrey : popupUiWhite);
-        g.drawText (row.label.toUpperCase(), labelArea.reduced (10, 0), juce::Justification::centredLeft, true);
+        g.drawText (toPopupUiUppercase (row.label), labelArea.reduced (10, 0), juce::Justification::centredLeft, true);
     }
 }
 
@@ -627,7 +650,7 @@ void BrowserActionContent::paint (juce::Graphics& g)
 
     g.setFont (makePopupUiFont());
     g.setColour (popupUiWhite);
-    g.drawFittedText (fileLabel.toUpperCase(), titleBounds, juce::Justification::centred, 1, 1.0f);
+    g.drawFittedText (toPopupUiUppercase (fileLabel), titleBounds, juce::Justification::centred, 1, 1.0f);
 
     g.setColour (popupUiGrey700);
     g.fillRect (removeButtonBounds);
@@ -832,8 +855,8 @@ void NowPlayingContent::paint (juce::Graphics& g)
     g.setFont (makePopupUiFont());
     g.drawFittedText ("-15", seekBackwardBounds, juce::Justification::centred, 1, 1.0f);
     g.drawFittedText ("+15", seekForwardBounds, juce::Justification::centred, 1, 1.0f);
-    g.drawFittedText (title.toUpperCase(), titleArea, juce::Justification::centred, 1, 1.0f);
-    g.drawFittedText (subtitle.toUpperCase(), subtitleArea, juce::Justification::centred, 1, 1.0f);
+    g.drawFittedText (toPopupUiUppercase (title), titleArea, juce::Justification::centred, 1, 1.0f);
+    g.drawFittedText (toPopupUiUppercase (subtitle), subtitleArea, juce::Justification::centred, 1, 1.0f);
 }
 
 juce::Rectangle<int> NowPlayingContent::getArtworkBounds() const
