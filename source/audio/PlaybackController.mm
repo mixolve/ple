@@ -702,8 +702,17 @@ void PlaybackController::refreshPlaybackQueue()
 
     for (const auto& file : state.availableAudioFiles)
     {
-        if (file.isAChildOf (scopeDirectory))
+        if (file.isAChildOf (scopeDirectory) && ! isBrowserFileMarked (file))
             state.playbackQueue.push_back (file);
+    }
+
+    if (state.playbackQueue.empty())
+    {
+        for (const auto& file : state.availableAudioFiles)
+        {
+            if (! isBrowserFileMarked (file))
+                state.playbackQueue.push_back (file);
+        }
     }
 
     if (state.playbackQueue.empty())

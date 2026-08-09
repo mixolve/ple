@@ -181,6 +181,7 @@ public:
 private:
     bool isInsideRemoveButton (juce::Point<float> position) const noexcept;
     bool isInsideMarkButton (juce::Point<float> position) const noexcept;
+    bool isInsideCloseButton (juce::Point<float> position) const noexcept;
     void resetPressState();
 
     juce::String fileLabel;
@@ -192,12 +193,15 @@ private:
     juce::Rectangle<int> titleBounds;
     juce::Rectangle<int> removeButtonBounds;
     juce::Rectangle<int> markButtonBounds;
+    juce::Rectangle<int> closeButtonBounds;
     juce::Point<float> pressPosition;
     bool removePressed = false;
     bool removeLongPressReady = false;
     bool removePointerInside = false;
     bool markPressed = false;
     bool markPointerInside = false;
+    bool closePressed = false;
+    bool closePointerInside = false;
 };
 
 class NowPlayingContent final : public juce::Component

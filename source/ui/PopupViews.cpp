@@ -638,9 +638,13 @@ void BrowserActionContent::resized()
     area.removeFromTop (8);
 
     auto buttonsArea = area.removeFromTop (popupUiActionHeight);
-    removeButtonBounds = buttonsArea.removeFromLeft (popupUiActionWidth);
+    const auto buttonWidth = juce::jmax (1, juce::jmin (popupUiActionWidth,
+                                                        (buttonsArea.getWidth() - (popupUiActionGap * 2)) / 3));
+    removeButtonBounds = buttonsArea.removeFromLeft (buttonWidth);
     buttonsArea.removeFromLeft (popupUiActionGap);
-    markButtonBounds = buttonsArea.removeFromLeft (popupUiActionWidth);
+    markButtonBounds = buttonsArea.removeFromLeft (buttonWidth);
+    buttonsArea.removeFromLeft (popupUiActionGap);
+    closeButtonBounds = buttonsArea.removeFromLeft (buttonWidth);
 }
 
 void BrowserActionContent::paint (juce::Graphics& g)
@@ -655,10 +659,12 @@ void BrowserActionContent::paint (juce::Graphics& g)
     g.setColour (popupUiGrey700);
     g.fillRect (removeButtonBounds);
     g.fillRect (markButtonBounds);
+    g.fillRect (closeButtonBounds);
 
     g.setColour (popupUiGrey500);
     g.drawRect (removeButtonBounds, 1);
     g.drawRect (markButtonBounds, 1);
+    g.drawRect (closeButtonBounds, 1);
 
     g.setColour (popupUiWhite);
     g.drawFittedText (canRemove ? (removeLongPressReady ? "SURE?" : "REMOVE") : "LOCKED",
@@ -667,14 +673,16 @@ void BrowserActionContent::paint (juce::Graphics& g)
                        1,
                        1.0f);
     g.drawFittedText (isMarked ? "UNMARK" : "MARK", markButtonBounds, juce::Justification::centred, 1, 1.0f);
+    g.drawFittedText ("CLOSE", closeButtonBounds, juce::Justification::centred, 1, 1.0f);
 }
 
 void BrowserActionContent::mouseMove (const juce::MouseEvent& event)
 {
     removePointerInside = isInsideRemoveButton (event.position);
     markPointerInside = isInsideMarkButton (event.position);
+    closePointerInside = isInsideCloseButton (event.position);
 
-    const auto cursor = isInsideRemoveButton (event.position) || isInsideMarkButton (event.position)
+    const auto cursor = isInsideRemoveButton (event.position) || isInsideMarkButton (event.position) || isInsideCloseButton (event.position)
                         ? juce::MouseCursor::PointingHandCursor
                         : juce::MouseCursor::NormalCursor;
 
@@ -686,6 +694,7 @@ void BrowserActionContent::mouseExit (const juce::MouseEvent&)
     setMouseCursor (juce::MouseCursor::NormalCursor);
     removePointerInside = false;
     markPointerInside = false;
+    closePointerInside = false;
 }
 
 void BrowserActionContent::mouseDown (const juce::MouseEvent& event)
@@ -693,8 +702,10 @@ void BrowserActionContent::mouseDown (const juce::MouseEvent& event)
     pressPosition = event.position;
     removePressed = isInsideRemoveButton (event.position);
     markPressed = isInsideMarkButton (event.position);
+    closePressed = isInsideCloseButton (event.position);
     removePointerInside = removePressed;
     markPointerInside = markPressed;
+    closePointerInside = closePressed;
 
     if (removePressed && canRemove)
         startTimer (1000);
@@ -704,6 +715,7 @@ void BrowserActionContent::mouseDrag (const juce::MouseEvent& event)
 {
     removePointerInside = isInsideRemoveButton (event.position);
     markPointerInside = isInsideMarkButton (event.position);
+    closePointerInside = isInsideCloseButton (event.position);
 }
 
 void BrowserActionContent::mouseUp (const juce::MouseEvent& event)
@@ -712,6 +724,7 @@ void BrowserActionContent::mouseUp (const juce::MouseEvent& event)
 
     const auto insideRemove = isInsideRemoveButton (event.position);
     const auto insideMark = isInsideMarkButton (event.position);
+    const auto insideClose = isInsideCloseButton (event.position);
     auto shouldDismiss = false;
 
     if (removeLongPressReady && insideRemove && removeCallback != nullptr)
@@ -722,6 +735,10 @@ void BrowserActionContent::mouseUp (const juce::MouseEvent& event)
     else if (markPressed && insideMark && toggleMarkCallback != nullptr)
     {
         toggleMarkCallback();
+        shouldDismiss = true;
+    }
+    else if (closePressed && insideClose)
+    {
         shouldDismiss = true;
     }
 
@@ -752,6 +769,11 @@ bool BrowserActionContent::isInsideMarkButton (juce::Point<float> position) cons
     return markButtonBounds.contains (position.toInt());
 }
 
+bool BrowserActionContent::isInsideCloseButton (juce::Point<float> position) const noexcept
+{
+    return closeButtonBounds.contains (position.toInt());
+}
+
 void BrowserActionContent::resetPressState()
 {
     stopTimer();
@@ -760,6 +782,8 @@ void BrowserActionContent::resetPressState()
     removePointerInside = false;
     markPressed = false;
     markPointerInside = false;
+    closePressed = false;
+    closePointerInside = false;
 }
 
 NowPlayingContent::NowPlayingContent (SwipeCallback previousTrackActionToOwn,
